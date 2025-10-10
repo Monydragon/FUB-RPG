@@ -1,0 +1,35 @@
+﻿namespace Fub.Enums;
+
+public enum ActorClass
+{
+    Adventurer,
+    Warrior,
+    BlackMage,
+    Druid,
+    Bard,
+    Rogue,
+    Monk,
+    Ranger,
+    WhiteMage,
+    RedMage,
+    BlueMage,
+    Barbarian,
+    Paladin,
+    Artificer,
+    Summoner,
+    Ninja,
+    Dragoon,
+    Gunner,
+    Necromancer,
+    Carpenter,
+    Blacksmith,
+    Armorer,
+    Goldsmith,
+    Leatherworker,
+    Weaver,
+    Alchemist,
+    Culinarian,
+    Miner,
+    Botanist,
+    Fisher
+}
