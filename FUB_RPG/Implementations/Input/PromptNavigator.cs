@@ -19,33 +19,45 @@ public static class PromptNavigator
         => PromptChoice(title, choices, state.InputMode, state.ControllerType);
 
     public static string PromptChoice(string title, IList<string> choices, InputMode mode, ControllerType controllerType)
-    {
-        if (mode == InputMode.Keyboard)
-        {
-            int reserved = 6;
-            int minRows = 6;
-            int page = Math.Min(choices.Count, Math.Max(minRows, Console.WindowHeight - reserved));
-            return AnsiConsole.Prompt(new SelectionPrompt<string>().Title(title).PageSize(page).AddChoices(choices));
-        }
-        return PromptChoiceController(title, choices, controllerType);
-    }
+        => PromptChoice(title, choices, mode, controllerType, renderBackground: null);
 
     public static T PromptChoice<T>(string title, IList<T> choices, InputMode mode, ControllerType controllerType) where T : notnull
+        => PromptChoice(title, choices, mode, controllerType, renderBackground: null);
+
+    // New overloads that allow passing a background renderer for controller UI
+    public static string PromptChoice(string title, IList<string> choices, InputMode mode, ControllerType controllerType, Action? renderBackground)
     {
         if (mode == InputMode.Keyboard)
         {
             int reserved = 6;
             int minRows = 6;
-            int page = Math.Min(choices.Count, Math.Max(minRows, Console.WindowHeight - reserved));
+            int viewport = Math.Max(minRows, Console.WindowHeight - reserved);
+            int page = Math.Max(3, Math.Min(choices.Count, viewport));
+            return AnsiConsole.Prompt(new SelectionPrompt<string>().Title(title).PageSize(page).AddChoices(choices));
+        }
+        return PromptChoiceController(title, choices, controllerType, renderBackground);
+    }
+
+    public static T PromptChoice<T>(string title, IList<T> choices, InputMode mode, ControllerType controllerType, Action? renderBackground) where T : notnull
+    {
+        if (mode == InputMode.Keyboard)
+        {
+            int reserved = 6;
+            int minRows = 6;
+            int viewport = Math.Max(minRows, Console.WindowHeight - reserved);
+            int page = Math.Max(3, Math.Min(choices.Count, viewport));
             return AnsiConsole.Prompt(new SelectionPrompt<T>().Title(title).PageSize(page).AddChoices(choices));
         }
-        var labels = choices.Select(c => c.ToString()).ToList();
-        var pickedLabel = PromptChoiceController(title, labels, controllerType);
+        var labels = choices.Select(c => c.ToString() ?? string.Empty).ToList();
+        var pickedLabel = PromptChoiceController(title, labels, controllerType, renderBackground);
         int idx = labels.FindIndex(l => l == pickedLabel);
         return idx >= 0 ? choices[idx] : choices.First();
     }
 
     private static string PromptChoiceController(string title, IList<string> choices, ControllerType type)
+        => PromptChoiceController(title, choices, type, renderBackground: null);
+
+    private static string PromptChoiceController(string title, IList<string> choices, ControllerType type, Action? renderBackground)
     {
         if (choices.Count == 0)
             return string.Empty;
@@ -55,7 +67,10 @@ public static class PromptNavigator
 
         while (true)
         {
-            Console.Clear();
+            AnsiConsole.Clear();
+
+            // Allow caller to render surrounding UI (e.g., combat status, details)
+            renderBackground?.Invoke();
 
             // Header
             if (!string.IsNullOrWhiteSpace(title))
@@ -128,7 +143,8 @@ public static class PromptNavigator
                 case InputAction.Menu:
                     {
                         int backIdx = IndexOfInsensitive(choices, "Back");
-                        if (backIdx >= 0) return choices[backIdx];
+                        if 
+                            (backIdx >= 0) return choices[backIdx];
                         break;
                     }
             }

@@ -11,12 +11,28 @@ public sealed class Party : IParty
     public IReadOnlyList<IActor> Members => _members;
     public IActor Leader { get; private set; }
     public int MaxSize { get; }
+    public int Gold { get; private set; }
 
     public Party(IActor leader, int maxSize = 4)
     {
         MaxSize = maxSize;
         _members.Add(leader);
         Leader = leader;
+        Gold = 0;
+    }
+
+    public void AddGold(int amount)
+    {
+        if (amount <= 0) return;
+        checked { Gold += amount; }
+    }
+
+    public bool TrySpendGold(int amount)
+    {
+        if (amount <= 0) return true;
+        if (Gold < amount) return false;
+        Gold -= amount;
+        return true;
     }
 
     public bool TryAdd(IActor actor)
@@ -48,4 +64,3 @@ public sealed class Party : IParty
         return true;
     }
 }
-

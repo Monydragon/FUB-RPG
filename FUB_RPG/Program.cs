@@ -23,20 +23,17 @@ class Program
         {
             AnsiConsole.MarkupLine("[bold green]Welcome to Fub RPG Prototype (Party Edition)![/]");
 
-            // Detect input mode early so character creation supports controller
-            var mode = InputManager.DetectMode();
-            var controllerType = mode == InputMode.Controller
-                ? InputManager.DetectControllerType()
-                : ControllerType.Unknown;
+            // New: pick input mode by the first input pressed
+            AnsiConsole.MarkupLine("[grey]Press any keyboard key or controller button to start...[/]");
+            var mode = InputManager.WaitForFirstInput(out var controllerType);
+            if (mode == InputMode.Keyboard) controllerType = ControllerType.Unknown;
             PromptNavigator.DefaultInputMode = mode;
             PromptNavigator.DefaultControllerType = controllerType;
 
-            // Inform the player right away
+            // Inform the player
             AnsiConsole.MarkupLine(mode == InputMode.Controller
                 ? $"[cyan]Controller detected ({controllerType}). Showing controller button prompts.[/]"
                 : "[cyan]Keyboard/Mouse mode. Showing keyboard key prompts.[/]");
-            AnsiConsole.MarkupLine("Press any key to continue...");
-            InputWaiter.WaitForAny(mode);
 
             var party = CharacterCreation(mode, controllerType);
 

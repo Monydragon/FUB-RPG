@@ -7,7 +7,7 @@ public enum StatType
 {
     Health,
     Mana,
-    Stamina,
+    Technical,
     Strength,
     Agility,
     Intellect,

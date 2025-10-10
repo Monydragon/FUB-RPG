@@ -147,6 +147,47 @@ public static class InputManager
         return mode == InputMode.Controller ? ReadControllerAction() : ReadKeyboardAction();
     }
 
+    // NEW: Wait for the first input source and return the chosen mode.
+    public static InputMode WaitForFirstInput(out ControllerType controllerType)
+    {
+        controllerType = ControllerType.Unknown;
+        while (true)
+        {
+            // Keyboard first: if any key available, consume and return
+            if (Console.KeyAvailable)
+            {
+                _ = Console.ReadKey(true);
+                controllerType = ControllerType.Unknown;
+                return InputMode.Keyboard;
+            }
+
+            // Controller: scan connected gamepads and check for any active input
+            for (int i = 0; i < 4; i++)
+            {
+                if (!TryGetState(i, out var state)) continue;
+                if (IsControllerInputActive(state))
+                {
+                    controllerType = DetectControllerType();
+                    return InputMode.Controller;
+                }
+            }
+
+            Thread.Sleep(10);
+        }
+    }
+
+    private static bool IsControllerInputActive(XINPUT_STATE state)
+    {
+        var buttons = (XINPUT_GAMEPAD_BUTTONS)state.Gamepad.wButtons;
+        if (buttons != 0) return true;
+        if (state.Gamepad.bLeftTrigger > 0 || state.Gamepad.bRightTrigger > 0) return true;
+        if (Math.Abs(state.Gamepad.sThumbLX) > AxisDeadzone) return true;
+        if (Math.Abs(state.Gamepad.sThumbLY) > AxisDeadzone) return true;
+        if (Math.Abs(state.Gamepad.sThumbRX) > AxisDeadzone) return true;
+        if (Math.Abs(state.Gamepad.sThumbRY) > AxisDeadzone) return true;
+        return false;
+    }
+
     private static InputAction ReadKeyboardAction()
     {
         var key = Console.ReadKey(true);
@@ -223,28 +264,24 @@ public static class InputManager
                     _didInitialRepeat = false;
                 }
 
-                // Non-directional button actions: fire on rising edge only (no repeats)
-                InputAction edgeAction = EdgeButtonToAction(_prevButtons, buttons);
+                // Edge-detect confirm/cancel/etc.
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.A)) return InputAction.Interact;
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.B)) return InputAction.Menu;   // treat as cancel
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.X)) return InputAction.Inventory;
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.Y)) return InputAction.Party;
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.LeftShoulder)) return InputAction.Help;
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.RightShoulder)) return InputAction.Log;
+
                 _prevButtons = buttons;
-                if (edgeAction != InputAction.None) return edgeAction;
             }
-            Thread.Sleep(16); // ~60Hz
+
+            Thread.Sleep(16);
         }
     }
 
-    private static InputAction EdgeButtonToAction(XINPUT_GAMEPAD_BUTTONS prev, XINPUT_GAMEPAD_BUTTONS curr)
-    {
-        bool Rising(XINPUT_GAMEPAD_BUTTONS f) => !Has(prev, f) && Has(curr, f);
-        if (Rising(XINPUT_GAMEPAD_BUTTONS.A)) return InputAction.Interact;   // Confirm
-        if (Rising(XINPUT_GAMEPAD_BUTTONS.X)) return InputAction.Inventory;
-        if (Rising(XINPUT_GAMEPAD_BUTTONS.Y)) return InputAction.Party;
-        if (Rising(XINPUT_GAMEPAD_BUTTONS.Back)) return InputAction.Menu;     // View
-        if (Rising(XINPUT_GAMEPAD_BUTTONS.Start)) return InputAction.Help;    // Start
-        if (Rising(XINPUT_GAMEPAD_BUTTONS.B)) return InputAction.Search;      // Use as Cancel/Search
-        if (Rising(XINPUT_GAMEPAD_BUTTONS.RightShoulder)) return InputAction.Log; // Toggle log
-        return InputAction.None;
-    }
+    private static bool Has(XINPUT_GAMEPAD_BUTTONS buttons, XINPUT_GAMEPAD_BUTTONS flag)
+        => (buttons & flag) == flag;
 
-    private static bool Has(XINPUT_GAMEPAD_BUTTONS value, XINPUT_GAMEPAD_BUTTONS flag)
-        => (value & flag) == flag;
+    private static bool Edge(XINPUT_GAMEPAD_BUTTONS buttons, XINPUT_GAMEPAD_BUTTONS flag)
+        => Has(buttons, flag) && !Has(_prevButtons, flag);
 }

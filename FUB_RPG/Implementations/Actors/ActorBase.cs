@@ -3,6 +3,7 @@
 using Fub.Implementations.Inventory;
 // Added
 using System.Linq;
+using System.Collections.Generic;
 using Fub.Enums;
 using Fub.Implementations.Core;
 using Fub.Implementations.Items.Equipment;
@@ -48,19 +49,32 @@ public abstract class ActorBase : EntityBase, IActor
         X = startX;
         Y = startY;
         JobSystem = new JobSystem();
-        Inventory = new Inventory.Inventory(20); // Corrected
-        StatsInternal = new StatsCollection()
-            .InitializeDefaults(new[]
-            {
-                (StatType.Health, 100d),
-                (StatType.Mana, 50d),
-                (StatType.Stamina, 50d),
-                (StatType.Strength, 10d),
-                (StatType.Agility, 10d),
-                (StatType.Intellect, 10d),
-                (StatType.Vitality, 10d)
-            });
+        Inventory = new Inventory.Inventory(1000);
+        StatsInternal = InitializeStats(ActorStatPresets.Default());
         EquipmentManager = new EquipmentManager();
+    }
+
+    /// <summary>
+    /// Constructor that accepts custom stat values for full control.
+    /// Use ActorStatPresets for convenient defaults.
+    /// </summary>
+    protected ActorBase(string name, Species species, ActorClass @class, int startX, int startY, Dictionary<StatType, double> customStats) : base(name)
+    {
+        Species = species;
+        Class = @class;
+        X = startX;
+        Y = startY;
+        JobSystem = new JobSystem();
+        Inventory = new Inventory.Inventory(1000);
+        StatsInternal = InitializeStats(customStats);
+        EquipmentManager = new EquipmentManager();
+    }
+
+    private StatsCollection InitializeStats(Dictionary<StatType, double> statValues)
+    {
+        var collection = new StatsCollection();
+        collection.InitializeDefaults(statValues.Select(kvp => (kvp.Key, kvp.Value)));
+        return collection;
     }
 
     // Make GetEquipped accessible
