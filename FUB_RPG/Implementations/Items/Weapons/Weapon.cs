@@ -15,6 +15,7 @@ public sealed class Weapon : ItemBase, IWeapon
     public double MaxDamage { get; }
     public double AttackSpeed { get; }
     public DamageType DefaultDamageType { get; }
+    public EquipmentTier Tier { get; } // Added tier
 
     public int RequiredLevel { get; }
     public IReadOnlyCollection<ActorClass> AllowedClasses { get; }
@@ -32,7 +33,8 @@ public sealed class Weapon : ItemBase, IWeapon
         EquipmentSlot slot,
         int requiredLevel = 1,
         IEnumerable<ActorClass>? allowedClasses = null,
-        IReadOnlyDictionary<StatType, double>? statRequirements = null)
+        IReadOnlyDictionary<StatType, double>? statRequirements = null,
+        EquipmentTier tier = EquipmentTier.Simple) // Added param
         : base(name, Enums.ItemType.Weapon, rarity)
     {
         WeaponType = weaponType;
@@ -44,6 +46,7 @@ public sealed class Weapon : ItemBase, IWeapon
         RequiredLevel = requiredLevel;
         AllowedClasses = allowedClasses?.ToList() ?? new List<ActorClass>(System.Enum.GetValues<ActorClass>());
         StatRequirements = statRequirements ?? new Dictionary<StatType, double>();
+        Tier = tier; // set tier
     }
 
     public double RollDamage(System.Random rng) => rng.NextDouble() * (MaxDamage - MinDamage) + MinDamage;

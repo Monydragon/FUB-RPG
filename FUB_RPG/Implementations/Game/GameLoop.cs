@@ -223,7 +223,9 @@ public sealed class GameLoop : IGameLoop
             RarityTier.Common,
             EquipmentSlot.MainHand,
             requiredLevel: 1,
-            allowedClasses: new [] { cls }
+            allowedClasses: new [] { cls },
+            statRequirements: null,
+            tier: EquipmentTier.Simple
         );
     }
 
@@ -579,6 +581,7 @@ public sealed class GameLoop : IGameLoop
             AnsiConsole.MarkupLine("Rarity: " + selectedItem.item.Rarity.ToString());
             if (selectedItem.item is IWeapon w)
             {
+                AnsiConsole.MarkupLine("Tier: " + (w is Weapon ww ? ww.Tier.ToString() : "-") );
                 AnsiConsole.MarkupLine("Damage: " + w.MinDamage.ToString() + "-" + w.MaxDamage.ToString());
                 AnsiConsole.MarkupLine("Weapon Type: " + w.WeaponType.ToString());
             }
