@@ -9,6 +9,7 @@ using Fub.Implementations.Actors;
 using Fub.Interfaces.Actors;
 using Fub.Interfaces.Combat;
 using Fub.Interfaces.Items.Weapons;
+using Fub.Implementations.Input;
 
 namespace Fub.Implementations.Combat;
 
@@ -80,7 +81,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[grey]Press any key to continue...[/]");
-        Console.ReadKey(true);
+        InputWaiter.WaitForAny(PromptNavigator.DefaultInputMode);
     }
 
     public void EndCombat(ICombatSession session)
@@ -105,8 +106,13 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             AnsiConsole.Write(new Rule("[bold red]\ud83d\udc80 DEFEAT \ud83d\udc80[/]").RuleStyle("red"));
             AnsiConsole.MarkupLine("\n[red]Your party has been defeated...[/]");
         }
+        else
+        {
+            AnsiConsole.MarkupLine("[red]Returning to main menu...[/]");
+        }
         
-        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("Press any key to continue...");
+        InputWaiter.WaitForAny(PromptNavigator.DefaultInputMode);
     }
 
     private ICombatAction? GetPlayerAction(IActor actor, ICombatSession session)
@@ -120,10 +126,11 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             .Padding(1, 0));
 
         var choices = new List<string> { "\u2694\ufe0f Attack", "\ud83d\udee1\ufe0f Defend", "\ud83c\udfc3 Pass" };
-        var choice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("Select action:")
-                .AddChoices(choices));
+        var choice = PromptNavigator.PromptChoice(
+            "Select action:",
+            choices,
+            PromptNavigator.DefaultInputMode,
+            PromptNavigator.DefaultControllerType);
 
         if (choice.Contains("Attack"))
         {
@@ -131,10 +138,11 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 e => $"{e.Name} (HP: {e.GetStat(StatType.Health).Current:F0}/{e.GetStat(StatType.Health).Modified:F0})",
                 e => e);
 
-            var targetDisplay = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("Select target:")
-                    .AddChoices(displayMap.Keys));
+            var targetDisplay = PromptNavigator.PromptChoice(
+                "Select target:",
+                displayMap.Keys.ToList(),
+                PromptNavigator.DefaultInputMode,
+                PromptNavigator.DefaultControllerType);
             var target = displayMap[targetDisplay];
             return new CombatAction(CombatActionType.Attack, actor, target, priority: 0);
         }

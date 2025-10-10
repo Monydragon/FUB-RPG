@@ -6,30 +6,59 @@ using Fub.Implementations.Parties;
 using Fub.Implementations.Player;
 using Fub.Implementations.Rendering;
 using Spectre.Console;
-// Added
 using Fub.Interfaces.Actors;
+using Fub.Implementations.Input;
+using System.Text;
 
 namespace Fub;
 
 class Program
 {
-    static void Main(string[] args)
+    static void Main()
     {
-        AnsiConsole.MarkupLine("[bold green]Welcome to Fub RPG Prototype (Party Edition)![/]");
+        Console.OutputEncoding = Encoding.UTF8;
+        bool prevCursor = Console.CursorVisible;
+        Console.CursorVisible = false;
+        try
+        {
+            AnsiConsole.MarkupLine("[bold green]Welcome to Fub RPG Prototype (Party Edition)![/]");
 
-        var party = CharacterCreation();
+            // Detect input mode early so character creation supports controller
+            var mode = InputManager.DetectMode();
+            var controllerType = mode == InputMode.Controller
+                ? InputManager.DetectControllerType()
+                : ControllerType.Unknown;
+            PromptNavigator.DefaultInputMode = mode;
+            PromptNavigator.DefaultControllerType = controllerType;
 
-        var state = new GameState(party);
-        var generator = new SimpleMapGenerator();
-        var renderer = new MapRenderer();
-        var loop = new GameLoop(state, generator, renderer);
+            // Inform the player right away
+            AnsiConsole.MarkupLine(mode == InputMode.Controller
+                ? $"[cyan]Controller detected ({controllerType}). Showing controller button prompts.[/]"
+                : "[cyan]Keyboard/Mouse mode. Showing keyboard key prompts.[/]");
+            AnsiConsole.MarkupLine("Press any key to continue...");
+            InputWaiter.WaitForAny(mode);
 
-        loop.RunAsync().GetAwaiter().GetResult();
+            var party = CharacterCreation(mode, controllerType);
 
-        AnsiConsole.MarkupLine("[grey]Thanks for playing![/]");
+            var state = new GameState(party);
+            state.SetInputMode(mode);
+            state.SetControllerType(controllerType);
+
+            var generator = new SimpleMapGenerator();
+            var renderer = new MapRenderer();
+            var loop = new GameLoop(state, generator, renderer);
+
+            loop.RunAsync().GetAwaiter().GetResult();
+
+            AnsiConsole.MarkupLine("[grey]Thanks for playing![/]");
+        }
+        finally
+        {
+            Console.CursorVisible = prevCursor;
+        }
     }
 
-    private static Party CharacterCreation()
+    private static Party CharacterCreation(InputMode mode, ControllerType controllerType)
     {
         var members = new List<IActor>();
         while (true)
@@ -48,35 +77,41 @@ class Program
                     table.AddRow(m.Name, m.Species.ToString(), m.Class.ToString());
                 AnsiConsole.Write(table);
             }
-            var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
-                .Title("Choose an option:")
-                .AddChoices("Add Member", "Remove Member", "Set Leader", "Finish"));
+            var choice = PromptNavigator.PromptChoice(
+                "Choose an option:",
+                new[] { "Add Member", "Remove Member", "Set Leader", "Finish" },
+                mode,
+                controllerType);
 
             if (choice == "Add Member")
             {
                 if (members.Count >= 4)
                 {
                     AnsiConsole.MarkupLine("[red]Party is full (max 4).[/]");
-                    Console.ReadKey(true);
+                    InputWaiter.WaitForAny(mode);
                     continue;
                 }
-                var actor = CreateActor($"Member{members.Count+1}");
+                var actor = CreateActor($"Member{members.Count+1}", mode, controllerType);
                 members.Add(actor);
             }
             else if (choice == "Remove Member")
             {
                 if (members.Count == 0) continue;
-                var name = AnsiConsole.Prompt(new SelectionPrompt<string>()
-                    .Title("Remove who?")
-                    .AddChoices(members.Select(m => m.Name)));
+                var name = PromptNavigator.PromptChoice(
+                    "Remove who?",
+                    members.Select(m => m.Name).ToList(),
+                    mode,
+                    controllerType);
                 members.RemoveAll(m => m.Name == name);
             }
             else if (choice == "Set Leader")
             {
                 if (members.Count == 0) continue;
-                var name = AnsiConsole.Prompt(new SelectionPrompt<string>()
-                    .Title("Set who as leader?")
-                    .AddChoices(members.Select(m => m.Name)));
+                var name = PromptNavigator.PromptChoice(
+                    "Set who as leader?",
+                    members.Select(m => m.Name).ToList(),
+                    mode,
+                    controllerType);
                 // Move selected to front
                 var selected = members.First(m => m.Name == name);
                 members.Remove(selected);
@@ -87,7 +122,7 @@ class Program
                 if (members.Count == 0)
                 {
                     AnsiConsole.MarkupLine("[yellow]You need at least one member.[/]");
-                    Console.ReadKey(true);
+                    InputWaiter.WaitForAny(mode);
                     continue;
                 }
                 var party = new Party(members[0]);
@@ -97,19 +132,21 @@ class Program
         }
     }
 
-    private static PlayerActor CreateActor(string defaultLabel)
+    private static PlayerActor CreateActor(string defaultLabel, InputMode mode, ControllerType controllerType)
     {
         var name = AnsiConsole.Ask<string>($"Enter name for {defaultLabel}:", defaultLabel);
 
-        var species = AnsiConsole.Prompt(
-            new SelectionPrompt<Species>()
-                .Title($"Select [yellow]species[/] for {name}:")
-                .AddChoices(Enum.GetValues<Species>()));
+        var species = PromptNavigator.PromptChoice(
+            $"Select [yellow]species[/] for {name}:",
+            Enum.GetValues<Species>().ToList(),
+            mode,
+            controllerType);
 
-        var baseClass = AnsiConsole.Prompt(
-            new SelectionPrompt<ActorClass>()
-                .Title($"Select base [yellow]class[/] for {name}:")
-                .AddChoices(Enum.GetValues<ActorClass>()));
+        var baseClass = PromptNavigator.PromptChoice(
+            $"Select base [yellow]class[/] for {name}:",
+            Enum.GetValues<ActorClass>().ToList(),
+            mode,
+            controllerType);
 
         var profile = new PlayerProfile(name);
         var actor = new PlayerActor(name, species, baseClass, profile, 0, 0);

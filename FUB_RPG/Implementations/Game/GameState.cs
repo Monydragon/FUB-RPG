@@ -13,6 +13,8 @@ public sealed class GameState : IGameState
     public IMap? CurrentMap { get; private set; }
     public IWorld? CurrentWorld { get; private set; }
     public int TurnNumber { get; private set; }
+    public InputMode InputMode { get; private set; } = InputMode.Keyboard;
+    public ControllerType ControllerType { get; private set; } = ControllerType.Unknown;
 
     public GameState(IParty party)
     {
@@ -23,4 +25,6 @@ public sealed class GameState : IGameState
     public void SetWorld(IWorld world) => CurrentWorld = world;
     public void SetPhase(GamePhase phase) => Phase = phase;
     public void IncrementTurn() => TurnNumber++;
+    public void SetInputMode(InputMode mode) => InputMode = mode;
+    public void SetControllerType(ControllerType type) => ControllerType = type;
 }

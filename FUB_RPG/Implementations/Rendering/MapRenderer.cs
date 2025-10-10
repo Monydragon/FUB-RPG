@@ -18,7 +18,7 @@ public sealed class MapRenderer
 
     public void Render(IMap map, IParty party)
     {
-        AnsiConsole.Clear();
+        // Don't clear here; caller manages screen. Render map area only.
         var leader = party.Leader;
 
         // Compute viewport centered on leader
@@ -47,10 +47,8 @@ public sealed class MapRenderer
             sb.AppendLine(line.ToString());
         }
 
-        var panel = new Panel(sb.ToString())
-            .Header($"{map.Name} ({map.Kind}) @ ({leader.X},{leader.Y})");
-        AnsiConsole.Write(panel);
-        AnsiConsole.WriteLine("Legend: [ P ] Player  [ E ] Enemy  [ N ] NPC  [ * ] Item  [#####]=Wall  [     ]=Floor");
+        // Write raw map lines to fill console area; no panel header to maximize space
+        AnsiConsole.Write(new Markup(sb.ToString()));
     }
 
     private static string Box(string inner)

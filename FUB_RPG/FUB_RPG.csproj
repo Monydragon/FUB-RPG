@@ -6,7 +6,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <LangVersion>preview</LangVersion>
-        <RootNamespace>FubWithAgents</RootNamespace>
+        <RootNamespace>Fub</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>
