@@ -34,22 +34,83 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         if (!session.IsActive) return;
 
         _defendingActors.Clear();
-        var actions = new List<ICombatAction>();
-        var planned = new List<string>();
+        // Build list of alive allies to plan actions for this turn
+        var aliveAllies = session.Allies.Where(a => a.GetStat(StatType.Health).Current > 0).ToList();
+        if (aliveAllies.Count == 0) return;
 
-        // Get actions from all alive allies with clear UI
-        foreach (var ally in session.Allies.Where(a => a.GetStat(StatType.Health).Current > 0))
+        var plannedByIndex = new ICombatAction?[aliveAllies.Count];
+
+        // Planning loop with back/forward navigation
+        int idx = 0;
+        while (idx < aliveAllies.Count)
         {
-            // Clear and render fresh status highlighting the current actor
+            var current = aliveAllies[idx];
+            // Render clean planning screen
             AnsiConsole.Clear();
-            RenderCombatStatus(session, current: ally, plannedActions: planned);
-            var action = GetPlayerAction(ally, session, planned);
-            if (action != null)
+            RenderCombatStatus(session, current: current, plannedActions: BuildPlannedDescriptions(plannedByIndex));
+            var sel = GetPlayerAction(current, session, BuildPlannedDescriptions(plannedByIndex), allowBack: idx > 0);
+            if (sel.Back)
             {
-                actions.Add(action);
-                planned.Add(DescribePlanned(action));
+                // Go back to previous actor; clear their previous selection to re-choose
+                idx = Math.Max(0, idx - 1);
+                plannedByIndex[idx] = null;
+                continue;
+            }
+            if (sel.Action != null)
+            {
+                plannedByIndex[idx] = sel.Action;
+                idx++;
+            }
+            else
+            {
+                // No action (should not happen normally); treat as pass
+                plannedByIndex[idx] = new CombatAction(CombatActionType.Pass, current, priority: -100);
+                idx++;
             }
         }
+
+        // Final confirmation screen, allow editing any actor before execution
+        while (true)
+        {
+            AnsiConsole.Clear();
+            RenderCombatStatus(session, current: null, plannedActions: BuildPlannedDescriptions(plannedByIndex));
+            AnsiConsole.Write(new Rule("[yellow]Confirm Planned Actions[/]").RuleStyle("yellow"));
+            var confirmChoice = PromptNavigator.PromptChoice(
+                "Proceed with these actions?",
+                new List<string> { "Confirm", "Edit Actor", "Restart Planning" },
+                PromptNavigator.DefaultInputMode,
+                PromptNavigator.DefaultControllerType,
+                renderBackground: () =>
+                {
+                    RenderCombatStatus(session, current: null, plannedActions: BuildPlannedDescriptions(plannedByIndex));
+                });
+            if (confirmChoice == "Confirm") break;
+            if (confirmChoice == "Restart Planning")
+            {
+                Array.Fill(plannedByIndex, null);
+                idx = 0;
+                continue;
+            }
+            // Edit specific actor
+            var actorOptions = aliveAllies.Select((a, i) => $"{i+1}. {a.Name}").ToList();
+            var chosen = PromptNavigator.PromptChoice(
+                "Edit which actor?",
+                actorOptions,
+                PromptNavigator.DefaultInputMode,
+                PromptNavigator.DefaultControllerType,
+                renderBackground: () =>
+                {
+                    RenderCombatStatus(session, current: null, plannedActions: BuildPlannedDescriptions(plannedByIndex));
+                });
+            int editIndex = Math.Max(1, ParseLeadingIndex(chosen)) - 1;
+            editIndex = Math.Clamp(editIndex, 0, aliveAllies.Count - 1);
+            idx = editIndex;
+            plannedByIndex[idx] = null;
+            // loop back to planning from this index
+        }
+
+        // Collect planned and enemy actions
+        var actions = plannedByIndex.Where(a => a != null)!.Cast<ICombatAction>().ToList();
 
         // Get actions from all alive enemies (AI)
         foreach (var enemy in session.Enemies.Where(e => e.GetStat(StatType.Health).Current > 0))
@@ -243,55 +304,78 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         return int.TryParse(part, out var n) ? n : 1;
     }
 
-    private ICombatAction? GetPlayerAction(IActor actor, ICombatSession session, List<string> plannedActions)
+    // Simple result container for selection with back navigation
+    private sealed class SelectionResult
     {
-        var validEnemies = session.Enemies.Where(e => e.GetStat(StatType.Health).Current > 0).ToList();
-        if (validEnemies.Count == 0) return null;
+        public ICombatAction? Action { get; init; }
+        public bool Back { get; init; }
+    }
 
-        AnsiConsole.WriteLine();
-        // Show current actor details panel for the action selection screen
-        WriteCurrentActorPanel(actor);
-
-        var choices = new List<string> { "\u2694\ufe0f Attack", "\ud83d\udee1\ufe0f Defend", "\ud83c\udfc3 Pass" };
-        var choice = PromptNavigator.PromptChoice(
-            "Select action:",
-            choices,
-            PromptNavigator.DefaultInputMode,
-            PromptNavigator.DefaultControllerType,
-            renderBackground: () =>
-            {
-                RenderCombatStatus(session, current: actor, plannedActions: plannedActions);
-                WriteCurrentActorPanel(actor);
-            });
-
-        if (choice.Contains("Attack"))
+    private SelectionResult GetPlayerAction(IActor actor, ICombatSession session, List<string> plannedActions, bool allowBack)
+    {
+        while (true)
         {
-            // Show enemies table for selection (no EXP)
-            WriteEnemiesTable(validEnemies);
+            var validEnemies = session.Enemies.Where(e => e.GetStat(StatType.Health).Current > 0).ToList();
+            if (validEnemies.Count == 0) return new SelectionResult { Action = null, Back = false };
 
-            var options = validEnemies.Select((e, idx) => $"{idx+1}. {e.Name} (Lv{e.Level} HP {e.GetStat(StatType.Health).Current:F0}/{e.GetStat(StatType.Health).Modified:F0})").ToList();
-            var choiceLabel = PromptNavigator.PromptChoice(
-                "Target:",
-                options,
+            AnsiConsole.WriteLine();
+            // Show current actor details panel for the action selection screen
+            WriteCurrentActorPanel(actor);
+
+            var choices = new List<string> { "\u2694\ufe0f Attack", "\ud83d\udee1\ufe0f Defend", "\ud83c\udfc3 Pass" };
+            if (allowBack) choices.Add("\u2190 Back to Previous Actor");
+
+            var choice = PromptNavigator.PromptChoice(
+                "Select action:",
+                choices,
                 PromptNavigator.DefaultInputMode,
                 PromptNavigator.DefaultControllerType,
                 renderBackground: () =>
                 {
                     RenderCombatStatus(session, current: actor, plannedActions: plannedActions);
                     WriteCurrentActorPanel(actor);
-                    WriteEnemiesTable(validEnemies);
                 });
-            int chosenIndex = Math.Max(1, ParseLeadingIndex(choiceLabel)) - 1;
-            var target = validEnemies[chosenIndex];
-            return new CombatAction(CombatActionType.Attack, actor, target, priority: 0);
-        }
-        else if (choice.Contains("Defend"))
-        {
-            return new CombatAction(CombatActionType.Defend, actor, priority: 100);
-        }
-        else
-        {
-            return new CombatAction(CombatActionType.Pass, actor, priority: -100);
+
+            if (allowBack && choice.Contains("Back"))
+            {
+                return new SelectionResult { Back = true };
+            }
+
+            if (choice.Contains("Attack"))
+            {
+                // Show enemies table for selection (no EXP)
+                WriteEnemiesTable(validEnemies);
+
+                var options = validEnemies.Select((e, idx) => $"{idx+1}. {e.Name} (Lv{e.Level} HP {e.GetStat(StatType.Health).Current:F0}/{e.GetStat(StatType.Health).Modified:F0})").ToList();
+                if (allowBack) options.Add("\u2190 Back");
+                var choiceLabel = PromptNavigator.PromptChoice(
+                    "Target:",
+                    options,
+                    PromptNavigator.DefaultInputMode,
+                    PromptNavigator.DefaultControllerType,
+                    renderBackground: () =>
+                    {
+                        RenderCombatStatus(session, current: actor, plannedActions: plannedActions);
+                        WriteCurrentActorPanel(actor);
+                        WriteEnemiesTable(validEnemies);
+                    });
+                if (allowBack && choiceLabel.Contains("Back"))
+                {
+                    // Back to action menu
+                    continue;
+                }
+                int chosenIndex = Math.Max(1, ParseLeadingIndex(choiceLabel)) - 1;
+                var target = validEnemies[chosenIndex];
+                return new SelectionResult { Action = new CombatAction(CombatActionType.Attack, actor, target, priority: 0) };
+            }
+            else if (choice.Contains("Defend"))
+            {
+                return new SelectionResult { Action = new CombatAction(CombatActionType.Defend, actor, priority: 100) };
+            }
+            else if (choice.Contains("Pass"))
+            {
+                return new SelectionResult { Action = new CombatAction(CombatActionType.Pass, actor, priority: -100) };
+            }
         }
     }
 
@@ -394,5 +478,15 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
     private long CalculateExperienceReward(int enemyLevel)
     {
         return (long)(50 * Math.Pow(enemyLevel, 1.5));
+    }
+
+    private List<string> BuildPlannedDescriptions(ICombatAction?[] planned)
+    {
+        var list = new List<string>();
+        foreach (var a in planned)
+        {
+            if (a != null) list.Add(DescribePlanned(a));
+        }
+        return list;
     }
 }
