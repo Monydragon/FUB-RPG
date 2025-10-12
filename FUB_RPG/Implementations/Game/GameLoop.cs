@@ -19,6 +19,7 @@ using Fub.Interfaces.Items.Weapons;
 using Fub.Implementations.Map.Objects; // Added for portals
 using Fub.Implementations.Abilities;
 using Fub.Interfaces.Abilities;
+using Fub.Interfaces.Combat;
 
 namespace Fub.Implementations.Game;
 
@@ -290,16 +291,16 @@ public sealed class GameLoop : IGameLoop
         switch (action)
         {
             case InputAction.MoveUp:
-                if (TryMoveParty(0, -1)) CheckForAutoInteractions(map);
+                if (TryMoveParty(0, -1)) { CheckForAutoInteractions(map); RegeneratePartyResources(mpPct: 0.02, tpPct: 0.03); }
                 break;
             case InputAction.MoveDown:
-                if (TryMoveParty(0, 1)) CheckForAutoInteractions(map);
+                if (TryMoveParty(0, 1)) { CheckForAutoInteractions(map); RegeneratePartyResources(mpPct: 0.02, tpPct: 0.03); }
                 break;
             case InputAction.MoveLeft:
-                if (TryMoveParty(-1, 0)) CheckForAutoInteractions(map);
+                if (TryMoveParty(-1, 0)) { CheckForAutoInteractions(map); RegeneratePartyResources(mpPct: 0.02, tpPct: 0.03); }
                 break;
             case InputAction.MoveRight:
-                if (TryMoveParty(1, 0)) CheckForAutoInteractions(map);
+                if (TryMoveParty(1, 0)) { CheckForAutoInteractions(map); RegeneratePartyResources(mpPct: 0.02, tpPct: 0.03); }
                 break;
             case InputAction.Inventory:
                 ShowInventoryMenu();
@@ -334,9 +335,10 @@ public sealed class GameLoop : IGameLoop
 
     private void ShowPartyMenu()
     {
-        var choices = new List<string> { "View Stats", "Change Leader", "Manage Equipment", "Back" };
+        var choices = new List<string> { "Inspect Member", "View Stats", "Change Leader", "Manage Equipment", "Back" };
         var choice = PromptNavigator.PromptChoice("[bold cyan]Party Menu[/]", choices, _state);
-        if (choice == "View Stats") ShowPartyStats();
+        if (choice == "Inspect Member") InspectMember();
+        else if (choice == "View Stats") ShowPartyStats();
         else if (choice == "Change Leader") ChangeLeader();
         else if (choice == "Manage Equipment") ShowEquipmentMenu();
         _uiInitialized = false; // redraw cleanly
@@ -428,19 +430,41 @@ public sealed class GameLoop : IGameLoop
         }
         AnsiConsole.Write(table);
 
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine($"[bold cyan]Job Levels for {member.Name}:[/]");
-        var jobTable = new Table();
-        jobTable.AddColumn("Job");
-        jobTable.AddColumn("Level");
-        jobTable.AddColumn("Experience");
-        foreach (var (jobClass, jobLevel) in member.JobSystem.JobLevels.OrderByDescending(j => j.Value.Level))
+        // Equipment actions
+        var actions = new List<string> { "Change Weapon", "Back" };
+        var action = PromptNavigator.PromptChoice("Equip Menu", actions, _state);
+        if (action == "Change Weapon")
         {
-            jobTable.AddRow(jobClass.ToString(), jobLevel.Level.ToString(), $"{jobLevel.Experience}/{jobLevel.ExperienceToNextLevel}");
+            var weapons = actorBase.Inventory.Slots
+                .Where(s => s.Item is IWeapon)
+                .Select(s => (weapon: (IWeapon)s.Item!, qty: s.Quantity))
+                .ToList();
+            if (!weapons.Any())
+            {
+                AnsiConsole.MarkupLine("[yellow]No weapons in inventory.[/]");
+                AnsiConsole.MarkupLine("Press any key to continue...");
+                InputWaiter.WaitForAny(_state.InputMode);
+                return;
+            }
+            var choices = weapons.Select(w => w.weapon.Name + " x" + w.qty.ToString()).ToList();
+            choices.Add("Back");
+            var picked = PromptNavigator.PromptChoice("Choose a weapon to equip:", choices, _state);
+            if (picked == "Back") return;
+            var sel = weapons.First(w => picked.StartsWith(w.weapon.Name, StringComparison.Ordinal)).weapon;
+            if (actorBase.TryEquip(sel, out var replaced))
+            {
+                AnsiConsole.MarkupLine("[green]Equipped " + sel.Name + "![/]");
+                AnsiConsole.MarkupLine("[cyan]Class is now: " + member.EffectiveClass + "[/]");
+                if (replaced != null) AnsiConsole.MarkupLine("[grey]Unequipped " + replaced.Name + "[/]");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[red]Cannot equip that.[/]");
+            }
+            AnsiConsole.MarkupLine("Press any key to continue...");
+            InputWaiter.WaitForAny(_state.InputMode);
         }
-        AnsiConsole.Write(jobTable);
-        AnsiConsole.MarkupLine("\nPress any key to continue...");
-        InputWaiter.WaitForAny(_state.InputMode);
+        _uiInitialized = false; // redraw cleanly
     }
 
     private void ShowWorldMapMenu()
@@ -575,7 +599,6 @@ public sealed class GameLoop : IGameLoop
         // Layout constants
         int sepLines = 1;
         int hudLines = 2; // Summary lines (no separate leader stat line)
-        int partyLines = _state.Party.MaxSize; // reserve fixed space to avoid overlap
         int maxLogLines = 6; // fixed reserve for log area at bottom
         int actionsLines = 1;
 
@@ -601,13 +624,10 @@ public sealed class GameLoop : IGameLoop
         WriteSection(row, hudLines, sbHud.ToString());
         row += hudLines;
 
-        // Party list (aligned, with leader icon)
-        var sbParty = new StringBuilder();
-        foreach (var m in _state.Party.Members)
-        {
-            sbParty.AppendLine(FormatPartyLine(m, leader.Id));
-        }
-        WriteSection(row, partyLines, sbParty.ToString());
+        // Party grid (compact core stats with colored bars)
+        string partyGrid = BuildPartyCoreGrid(_state.Party.Members, leader.Id);
+        int partyLines = SafeLineCount(partyGrid);
+        WriteSection(row, partyLines, partyGrid);
         row += partyLines;
 
         // Separator before actions/log block
@@ -774,29 +794,135 @@ public sealed class GameLoop : IGameLoop
         return string.Join(" [grey]|[/] ", actions);
     }
 
-    private void AddLog(string message)
+    // === New: Compact party HUD grid with colored bars for HP/MP/TP/EXP ===
+    private string BuildPartyCoreGrid(IReadOnlyList<IActor> members, Guid leaderId)
     {
-        if (string.IsNullOrWhiteSpace(message)) return;
-        _log.Add(message);
-        if (_log.Count > LogMaxEntries)
-            _log.RemoveRange(0, _log.Count - LogMaxEntries);
+        if (members.Count == 0) return "[grey]No party members[/]\n";
+        int consoleWidth = Math.Max(80, Console.WindowWidth);
+        int barWidth = Math.Clamp((consoleWidth - 10) / 4 - 10, 12, 24);
+        var sb = new StringBuilder();
+        foreach (var m in members)
+        {
+            string star = m.Id == leaderId ? "[yellow]★[/] " : "   ";
+            string name = TruncPad(m.Name, 16);
+            string species = TruncPad(m.Species.ToString(), 10);
+            string cls = TruncPad(m.EffectiveClass.ToString(), 12);
+            string lvl = $"Lv {m.Level}".PadRight(6);
+
+            sb.AppendLine($"{star}[white]{name}[/]  [green]{species}[/]  [cyan]{cls}[/]  [yellow]{lvl}[/]");
+
+            var hp = m.GetStat(StatType.Health);
+            var mp = m.GetStat(StatType.Mana);
+            var tp = m.GetStat(StatType.Technical);
+            var jl = m.JobSystem.GetJobLevel(m.EffectiveClass);
+            double expCur = jl.Experience;
+            double expMax = Math.Max(1, jl.ExperienceToNextLevel);
+            long toNext = Math.Max(0, jl.ExperienceToNextLevel - jl.Experience);
+            string hpBar = MakeBar("HP", hp.Current, hp.Modified, barWidth, "red1");
+            string mpBar = MakeBar("MP", mp.Current, mp.Modified, barWidth, "deepskyblue1");
+            string tpBar = MakeBar("TP", tp.Current, tp.Modified, barWidth, "orchid");
+            string xpBar = MakeBar("EXP", expCur, expMax, barWidth, "yellow3");
+            sb.AppendLine($"{hpBar}  {mpBar}  {tpBar}  {xpBar}  [yellow]ToNext:[/] [white]{toNext}[/]");
+        }
+        return sb.ToString();
     }
 
-    private bool ConfirmExitToMenu()
+    private static string MakeBar(string label, double current, double max, int width, string color)
     {
-        var answer = PromptNavigator.PromptChoice(
-            "Return to main menu?",
-            new[] { "No", "Yes" },
-            _state);
-        return answer == "Yes";
+        max = Math.Max(1.0, max);
+        current = Math.Max(0.0, Math.Min(current, max));
+        int filled = (int)Math.Round((current / max) * width);
+        int empty = Math.Max(0, width - filled);
+        string fill = new string('\u2588', Math.Max(0, filled));
+        string rest = new string('\u2500', Math.Max(0, empty));
+        string value = $"{current:0}/{max:0}";
+        return $"[{color}]{label}[/]: [{color}]{fill}[/][grey]{rest}[/] [{color}]{value}[/]";
     }
 
-    private void TalkToNpc(List<IMapObject> npcs)
+    private void ShowVictoryResults(ICombatSession session, List<IActor> enemyActors, Dictionary<Guid,int> preLevels)
     {
-        if (npcs.Count == 0) return;
-        var npc = npcs.First();
-        var npcName = npc.Actor?.Name ?? "NPC";
-        AddLog($"{npcName}: \"Greetings, traveler! The dungeon is dangerous. Stay safe!\"");
+        // Compute total EXP from enemies
+        long totalExp = enemyActors.Sum(e => (long)(50 * System.Math.Pow(e.Level, 1.5)));
+
+        // Prepare result data per ally
+        var results = new List<(IActor actor, int levelBefore, int levelAfter, long expGained, List<string> learned)>();
+        foreach (var ally in _state.Party.Members.Where(a => a.GetStat(StatType.Health).Current > 0))
+        {
+            var job = ally.EffectiveClass;
+            int before = preLevels.TryGetValue(ally.Id, out var lvl) ? lvl : ally.JobSystem.GetJobLevel(job).Level;
+            bool leveled = ally.JobSystem.AddExperience(job, totalExp);
+            int after = ally.JobSystem.GetJobLevel(job).Level;
+
+            var learned = new List<string>();
+            if (after > before)
+            {
+                for (int lvlUp = before + 1; lvlUp <= after; lvlUp++)
+                {
+                    foreach (var unlock in ClassAbilityLearnset.GetUnlocks(job))
+                    {
+                        if (unlock.Level == lvlUp && ally is IHasAbilityBook hab)
+                        {
+                            var gained = hab.AbilityBook.Learn(unlock.Factory());
+                            if (gained)
+                                learned.Add(hab.AbilityBook.KnownAbilities[^1].Name);
+                        }
+                    }
+                }
+            }
+
+            results.Add((ally, before, after, totalExp, learned));
+        }
+
+        // Render results screen
+        AnsiConsole.Clear();
+        AnsiConsole.Write(new Rule("[bold green]\ud83c\udf89 Victory Results \ud83c\udf89[/]").RuleStyle("green"));
+        AnsiConsole.WriteLine();
+
+        // Enemies defeated list
+        var enemiesPanel = new Panel(string.Join(System.Environment.NewLine, enemyActors.Select(e => $"[red]{e.Name}[/] Lv {e.Level}")))
+            .Header("[bold red]Enemies Defeated[/]").BorderColor(Color.Red);
+        AnsiConsole.Write(enemiesPanel);
+
+        // Party results table with colored bars
+        var table = new Table().Border(TableBorder.Rounded).Title("[bold cyan]Party Gains[/]");
+        table.AddColumn("Name");
+        table.AddColumn("Class");
+        table.AddColumn("Lv Before");
+        table.AddColumn("Lv After");
+        table.AddColumn("EXP Gained");
+        table.AddColumn("EXP Bar");
+
+        int barWidth = Math.Clamp((System.Console.WindowWidth - 40) / 4, 12, 24);
+        foreach (var r in results)
+        {
+            var jl = r.actor.JobSystem.GetJobLevel(r.actor.EffectiveClass);
+            double cur = jl.Experience;
+            double max = System.Math.Max(1, jl.ExperienceToNextLevel);
+            table.AddRow(
+                r.actor.Name,
+                r.actor.EffectiveClass.ToString(),
+                $"[yellow]{r.levelBefore}[/]",
+                $"[yellow]{r.levelAfter}[/]",
+                $"[yellow]{r.expGained}[/]",
+                Bar("EXP", cur, max, barWidth, "yellow3")
+            );
+        }
+        AnsiConsole.Write(table);
+
+        // Learned abilities panel (if any)
+        var learnedAll = results.SelectMany(r => r.learned.Select(name => ($"{r.actor.Name}", name))).ToList();
+        if (learnedAll.Count > 0)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var g in learnedAll)
+                sb.AppendLine($"[green]{g.Item1}[/] learned [yellow]{g.Item2}[/]!");
+            var learnedPanel = new Panel(new Markup(sb.ToString()))
+                .Header("[bold yellow]\u2728 New Abilities[/]").BorderColor(Color.Yellow);
+            AnsiConsole.Write(learnedPanel);
+        }
+
+        AnsiConsole.MarkupLine("[grey]Press any key to continue...[/]");
+        InputWaiter.WaitForAny(_state.InputMode);
     }
 
     private void EngageCombat(IMap map, List<IMapObject> enemies)
@@ -820,31 +946,10 @@ public sealed class GameLoop : IGameLoop
 
         if (session.Outcome == CombatOutcome.Victory)
         {
-            long totalExp = enemyActors.Sum(e => (long)(50 * System.Math.Pow(e.Level, 1.5)));
-            foreach (var ally in _state.Party.Members.Where(a => a.GetStat(StatType.Health).Current > 0))
-            {
-                var currentJob = ally.EffectiveClass;
-                var before = preLevels[ally.Id];
-                bool leveled = ally.JobSystem.AddExperience(currentJob, totalExp);
-                var after = ally.JobSystem.GetJobLevel(currentJob).Level;
-                if (leveled) AddLog($"{ally.Name}'s {currentJob} reached level {after}!");
+            // Show results screen that also applies EXP and learning
+            ShowVictoryResults(session, enemyActors, preLevels);
 
-                // Learn class abilities for each level gained
-                if (after > before)
-                {
-                    for (int lvl = before + 1; lvl <= after; lvl++)
-                    {
-                        foreach (var unlock in ClassAbilityLearnset.GetUnlocks(currentJob))
-                        {
-                            if (unlock.Level == lvl && ally is IHasAbilityBook hab)
-                            {
-                                var learned = hab.AbilityBook.Learn(unlock.Factory());
-                                if (learned) AddLog($"{ally.Name} learned {hab.AbilityBook.KnownAbilities[^1].Name}!");
-                            }
-                        }
-                    }
-                }
-            }
+            // Remove defeated enemies from the map
             foreach (var enemy in enemies) map.RemoveObject(enemy.Id);
             AddLog("Victory!");
         }
@@ -1040,5 +1145,116 @@ public sealed class GameLoop : IGameLoop
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[grey]Press any key to return to game...[/]");
         InputWaiter.WaitForAny(_state.InputMode);
+    }
+
+    private void RegeneratePartyResources(double mpPct, double tpPct)
+    {
+        foreach (var m in _state.Party.Members.Where(a => a.GetStat(StatType.Health).Current > 0))
+        {
+            if (m is not ActorBase ab) continue;
+            var mp = (Fub.Implementations.Stats.StatValue)ab.GetStat(StatType.Mana);
+            var tp = (Fub.Implementations.Stats.StatValue)ab.GetStat(StatType.Technical);
+            var mpDelta = Math.Max(1.0, mp.Modified * mpPct);
+            var tpDelta = Math.Max(1.0, tp.Modified * tpPct);
+            mp.ApplyDelta(mpDelta);
+            tp.ApplyDelta(tpDelta);
+        }
+    }
+
+    private bool ConfirmExitToMenu()
+    {
+        var answer = PromptNavigator.PromptChoice(
+            "Return to main menu?",
+            new[] { "No", "Yes" },
+            _state);
+        return answer == "Yes";
+    }
+
+    private void InspectMember()
+    {
+        if (_state.Party.Members.Count == 0) return;
+        var names = _state.Party.Members.Select(m => m.Name).ToList();
+        names.Add("Back");
+        var choice = PromptNavigator.PromptChoice("Select a member to inspect:", names, _state);
+        if (choice == "Back") return;
+        var actor = _state.Party.Members.First(m => m.Name == choice);
+
+        var jl = actor.JobSystem.GetJobLevel(actor.EffectiveClass);
+        double expCur = jl.Experience;
+        double expMax = Math.Max(1, jl.ExperienceToNextLevel);
+        long toNext = Math.Max(0, jl.ExperienceToNextLevel - jl.Experience);
+
+        var hp = actor.GetStat(StatType.Health);
+        var mp = actor.GetStat(StatType.Mana);
+        var tp = actor.GetStat(StatType.Technical);
+
+        int cw = Math.Max(80, Console.WindowWidth);
+        int barWidth = Math.Clamp((cw - 10) / 4 - 10, 12, 24);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"[white]{actor.Name}[/]  [cyan]{actor.EffectiveClass}[/]  [yellow]Lv {jl.Level}[/]  [grey]Species[/]: {actor.Species}");
+        sb.AppendLine(Bar("HP", hp.Current, hp.Modified, barWidth, "red1"));
+        sb.AppendLine(Bar("MP", mp.Current, mp.Modified, barWidth, "deepskyblue1"));
+        sb.AppendLine(Bar("TP", tp.Current, tp.Modified, barWidth, "orchid"));
+        sb.AppendLine(Bar("EXP", expCur, expMax, barWidth, "yellow3") + $"  [yellow]ToNext:[/] [white]{toNext}[/]");
+
+        var panel = new Panel(new Markup(sb.ToString()))
+            .Header("[bold cyan]Member Inspect[/]")
+            .BorderColor(Color.Cyan1);
+        AnsiConsole.Clear();
+        AnsiConsole.Write(panel);
+
+        // Quick stat table
+        var t = new Table().Border(TableBorder.Rounded).Title("[bold]Core Stats[/]");
+        t.AddColumn("Stat"); t.AddColumn("Value"); t.AddRow("STR", actor.GetStat(StatType.Strength).Modified.ToString("F0"));
+        t.AddRow("VIT", actor.GetStat(StatType.Vitality).Modified.ToString("F0"));
+        t.AddRow("AGI", actor.GetStat(StatType.Agility).Modified.ToString("F0"));
+        t.AddRow("INT", actor.GetStat(StatType.Intellect).Modified.ToString("F0"));
+        t.AddRow("SPR", actor.GetStat(StatType.Spirit).Modified.ToString("F0"));
+        t.AddRow("LCK", actor.GetStat(StatType.Luck).Modified.ToString("F0"));
+        t.AddRow("Armor", actor.GetStat(StatType.Armor).Modified.ToString("F0"));
+        t.AddRow("Evasion", actor.GetStat(StatType.Evasion).Modified.ToString("F0"));
+        t.AddRow("Crit%", actor.GetStat(StatType.CritChance).Modified.ToString("F0"));
+        AnsiConsole.Write(t);
+
+        AnsiConsole.MarkupLine("[grey]Press any key to return...[/]");
+        InputWaiter.WaitForAny(_state.InputMode);
+        _uiInitialized = false;
+    }
+
+    private void AddLog(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return;
+        _log.Add(message);
+        if (_log.Count > LogMaxEntries)
+            _log.RemoveRange(0, _log.Count - LogMaxEntries);
+    }
+
+    private static int SafeLineCount(string text)
+    {
+        if (text == null) return 0;
+        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        return lines.Length;
+    }
+
+    // Colored bar consistent with battle/results UI
+    private static string Bar(string label, double current, double max, int width, string color)
+    {
+        max = Math.Max(1.0, max);
+        current = Math.Max(0.0, Math.Min(current, max));
+        int filled = (int)Math.Round((current / max) * width);
+        int empty = Math.Max(0, width - filled);
+        string fill = new string('\u2588', Math.Max(0, filled));
+        string rest = new string('\u2500', Math.Max(0, empty));
+        string value = $"{current:0}/{max:0}";
+        return $"[{color}]{label}[/]: [{color}]{fill}[/][grey]{rest}[/] [{color}]{value}[/]";
+    }
+
+    private void TalkToNpc(List<IMapObject> npcs)
+    {
+        if (npcs == null || npcs.Count == 0) return;
+        var npc = npcs.First();
+        var npcName = npc.Actor?.Name ?? "NPC";
+        AddLog($"{npcName}: \"Greetings, traveler! The dungeon is dangerous. Stay safe!\"");
     }
 }

@@ -10,9 +10,12 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <PackageReference Include="Bogus" Version="35.6.4" />
       <PackageReference Include="DLS.MessageSystem" Version="2.2.0" />
       <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
       <PackageReference Include="Spectre.Console" Version="0.50.0-*" />
+      <!-- Added for name generation and transliteration -->
+      <PackageReference Include="UnidecodeSharpFork" Version="1.0.0" />
     </ItemGroup>
 
 </Project>

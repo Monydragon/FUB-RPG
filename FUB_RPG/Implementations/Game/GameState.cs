@@ -16,6 +16,9 @@ public sealed class GameState : IGameState
     public InputMode InputMode { get; private set; } = InputMode.Keyboard;
     public ControllerType ControllerType { get; private set; } = ControllerType.Unknown;
 
+    // New: Difficulty
+    public Difficulty Difficulty { get; private set; } = Difficulty.Normal;
+
     public GameState(IParty party)
     {
         Party = party;
@@ -27,4 +30,5 @@ public sealed class GameState : IGameState
     public void IncrementTurn() => TurnNumber++;
     public void SetInputMode(InputMode mode) => InputMode = mode;
     public void SetControllerType(ControllerType type) => ControllerType = type;
+    public void SetDifficulty(Difficulty difficulty) => Difficulty = difficulty;
 }

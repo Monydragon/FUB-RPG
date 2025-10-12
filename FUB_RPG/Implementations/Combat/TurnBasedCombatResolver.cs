@@ -1,4 +1,5 @@
 ﻿using Spectre.Console;
+using Spectre.Console.Rendering;
 using Fub.Enums;
 using Fub.Implementations.Actors;
 using Fub.Interfaces.Actors;
@@ -15,13 +16,45 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
     private readonly System.Random _rng = new();
     private readonly Dictionary<Guid, bool> _defendingActors = new();
 
+    // === UI helpers: bar rendering consistent with exploration HUD ===
+    private static string Bar(string label, double current, double max, int width, string color)
+    {
+        max = Math.Max(1.0, max);
+        current = Math.Max(0.0, Math.Min(current, max));
+        int filled = (int)Math.Round((current / max) * width);
+        int empty = Math.Max(0, width - filled);
+        string fill = new string('\u2588', Math.Max(0, filled));
+        string rest = new string('\u2500', Math.Max(0, empty));
+        string value = $"{current:0}/{max:0}";
+        // Colorize label and numeric value to match bar color
+        return $"[{color}]{label}[/]: [{color}]{fill}[/][grey]{rest}[/] [{color}]{value}[/]";
+    }
+
+    private static int BarWidth()
+    {
+        int cw = Math.Max(80, Console.WindowWidth);
+        return Math.Clamp((cw - 10) / 4 - 10, 12, 24);
+    }
+
+    private static string Fit(string s, int width)
+    {
+        if (s == null) return new string(' ', width);
+        return s.Length > width ? s.Substring(0, width) : s.PadRight(width);
+    }
+
+    private static string LevelTag(int level)
+    {
+        // Use yellow for level to make it stand out (was grey)
+        return $"[yellow]Lv {level}[/]";
+    }
+
     public ICombatSession BeginCombat(ICombatSession session)
     {
         AnsiConsole.Clear();
         AnsiConsole.Write(new Rule("[bold red]\u2694\ufe0f  COMBAT INITIATED  \u2694\ufe0f[/]").RuleStyle("red"));
         AnsiConsole.WriteLine();
         
-        RenderCombatStatus(session, current: null, plannedActions: null);
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
         AnsiConsole.WriteLine();
         return session;
     }
@@ -44,7 +77,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             var current = aliveAllies[idx];
             // Render clean planning screen
             AnsiConsole.Clear();
-            RenderCombatStatusWithMap(session, current: current, plannedMap: BuildPlannedMap(plannedByIndex, aliveAllies));
+            RenderCombatScene(session, current: current, plannedActions: BuildPlannedDescriptions(plannedByIndex), animationFrame: null);
             var sel = GetPlayerAction(current, session, BuildPlannedDescriptions(plannedByIndex), allowBack: idx > 0);
             if (sel.Back)
             {
@@ -70,40 +103,66 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         while (true)
         {
             AnsiConsole.Clear();
-            RenderCombatStatusWithMap(session, current: null, plannedMap: BuildPlannedMap(plannedByIndex, aliveAllies));
+            RenderCombatScene(session, current: null, plannedActions: BuildPlannedDescriptions(plannedByIndex), animationFrame: null);
             AnsiConsole.Write(new Rule("[yellow]Confirm Planned Actions[/]").RuleStyle("yellow"));
-            var confirmChoice = PromptNavigator.PromptChoice(
+            var confirmChoice = PromptNavigator.PromptChoice<string>(
                 "Proceed with these actions?",
                 new List<string> { "Confirm", "Edit Actor", "Restart Planning" },
                 PromptNavigator.DefaultInputMode,
                 PromptNavigator.DefaultControllerType,
                 renderBackground: () =>
                 {
-                    RenderCombatStatusWithMap(session, current: null, plannedMap: BuildPlannedMap(plannedByIndex, aliveAllies));
+                    RenderCombatScene(session, current: null, plannedActions: BuildPlannedDescriptions(plannedByIndex), animationFrame: null);
                 });
             if (confirmChoice == "Confirm") break;
             if (confirmChoice == "Restart Planning")
             {
                 Array.Fill(plannedByIndex, null);
                 idx = 0;
+                // Re-enter planning from the beginning
+                while (idx < aliveAllies.Count)
+                {
+                    var current = aliveAllies[idx];
+                    AnsiConsole.Clear();
+                    RenderCombatScene(session, current: current, plannedActions: BuildPlannedDescriptions(plannedByIndex), animationFrame: null);
+                    var sel2 = GetPlayerAction(current, session, BuildPlannedDescriptions(plannedByIndex), allowBack: idx > 0);
+                    if (sel2.Back)
+                    {
+                        idx = Math.Max(0, idx - 1);
+                        plannedByIndex[idx] = null;
+                        continue;
+                    }
+                    plannedByIndex[idx] = sel2.Action ?? new CombatAction(CombatActionType.Pass, current, priority: -100);
+                    idx++;
+                }
                 continue;
             }
-            // Edit specific actor
+            // Edit specific actor in-place (open their main action menu now)
             int editIndex = Math.Max(1, ParseLeadingIndex(
-                PromptNavigator.PromptChoice(
+                PromptNavigator.PromptChoice<string>(
                     "Edit which actor?",
                     aliveAllies.Select((a, i) => $"{i+1}. {a.Name}").ToList(),
                     PromptNavigator.DefaultInputMode,
                     PromptNavigator.DefaultControllerType,
                     renderBackground: () =>
                     {
-                        RenderCombatStatusWithMap(session, current: null, plannedMap: BuildPlannedMap(plannedByIndex, aliveAllies));
+                        RenderCombatScene(session, current: null, plannedActions: BuildPlannedDescriptions(plannedByIndex), animationFrame: null);
                     }
                 ))) - 1;
             editIndex = Math.Clamp(editIndex, 0, aliveAllies.Count - 1);
-            idx = editIndex;
-            plannedByIndex[idx] = null;
-            // loop back to planning from this index
+            var actorToEdit = aliveAllies[editIndex];
+            var prev = plannedByIndex[editIndex];
+            var selection = GetPlayerAction(actorToEdit, session, BuildPlannedDescriptions(plannedByIndex), allowBack: true);
+            if (selection.Back)
+            {
+                // Keep previous selection
+                plannedByIndex[editIndex] = prev;
+            }
+            else
+            {
+                plannedByIndex[editIndex] = selection.Action ?? new CombatAction(CombatActionType.Pass, actorToEdit, priority: -100);
+            }
+            // Loop back to confirmation to allow more edits or confirm
         }
 
         // Collect planned and enemy actions
@@ -133,176 +192,194 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 continue;
 
             ExecuteAction(action, session);
-            Thread.Sleep(600);
+            // Re-render after each action so numbers/bars update live
+            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
+            Thread.Sleep(300);
         }
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[grey]Press any key to continue...[/]");
         InputWaiter.WaitForAny(PromptNavigator.DefaultInputMode);
-        RenderCombatStatus(session, current: null, plannedActions: null);
+
+        // Regenerate small MP/TP per turn for all alive combatants
+        RegenerateResources(session.Allies.Where(a => a.GetStat(StatType.Health).Current > 0), mpPct: 0.03, tpPct: 0.04);
+        RegenerateResources(session.Enemies.Where(a => a.GetStat(StatType.Health).Current > 0), mpPct: 0.03, tpPct: 0.04);
+
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
     }
 
     public void EndCombat(ICombatSession session)
     {
         AnsiConsole.WriteLine();
-        
         if (session.Outcome == CombatOutcome.Victory)
         {
+            // Minimal banner; details shown in results screen outside resolver
             AnsiConsole.Write(new Rule("[bold green]\ud83c\udf89 VICTORY! \ud83c\udf89[/]").RuleStyle("green"));
-            
-            long totalExp = session.Enemies.Sum(e => CalculateExperienceReward(e.Level));
-            AnsiConsole.MarkupLine($"\n[yellow]Gained {totalExp} experience![/]");
-            
-            foreach (var ally in session.Allies.Where(a => a.GetStat(StatType.Health).Current > 0))
-            {
-                var jobClass = ally.EffectiveClass;
-                AnsiConsole.MarkupLine($"[green]{ally.Name}[/] gains {totalExp} EXP for {jobClass}!");
-            }
         }
         else if (session.Outcome == CombatOutcome.Defeat)
         {
             AnsiConsole.Write(new Rule("[bold red]\ud83d\udc80 DEFEAT \ud83d\udc80[/]").RuleStyle("red"));
             AnsiConsole.MarkupLine("\n[red]Your party has been defeated...[/]");
         }
+        // No input wait here; caller will handle next UI (e.g., Results screen)
+    }
+
+    // Render full scene: Enemies on top, Battle animation (optional) in the middle, Party at the bottom
+    private void RenderCombatScene(ICombatSession session, IActor? current, List<string>? plannedActions, string? animationFrame)
+    {
+        // Always clear to keep layers in the right order
+        AnsiConsole.Clear();
+
+        // Top: Enemies panel
+        var enemiesPanel = BuildEnemiesPanel(session);
+        AnsiConsole.Write(enemiesPanel);
+
+        // Middle: Battle display / planned actions
+        if (!string.IsNullOrEmpty(animationFrame))
+        {
+            var animPanel = new Panel(new Markup(animationFrame))
+            {
+                Header = new PanelHeader(" Battle ", Justify.Center),
+                Border = BoxBorder.Rounded,
+                BorderStyle = new Style(Color.Yellow)
+            };
+            AnsiConsole.Write(animPanel);
+        }
+        else if (plannedActions != null && plannedActions.Count > 0)
+        {
+            var planPanel = new Panel(string.Join(Environment.NewLine, plannedActions))
+                .Header("[bold yellow]Planned Actions[/]").BorderColor(Color.Yellow);
+            AnsiConsole.Write(planPanel);
+        }
         else
         {
-            AnsiConsole.MarkupLine("[red]Returning to main menu...");
+            // Empty spacer to visually separate
+            AnsiConsole.Write(new Panel(" ") { Border = BoxBorder.None });
         }
-        
-        AnsiConsole.MarkupLine("Press any key to continue...");
-        InputWaiter.WaitForAny(PromptNavigator.DefaultInputMode);
+
+        // Bottom: Allies panel (with optional current marker)
+        var alliesPanel = BuildAlliesPanel(session, current);
+        AnsiConsole.Write(alliesPanel);
     }
 
+    // Previous helpers now delegate to the unified scene
     private void RenderCombatStatus(ICombatSession session, IActor? current, List<string>? plannedActions)
     {
-        AnsiConsole.WriteLine();
-        var allies = new Table().Border(TableBorder.Rounded).Title("[bold green]Party[/]");
-        allies.AddColumn(" ");
-        allies.AddColumn("Name");
-        allies.AddColumn("Class");
-        allies.AddColumn("Species");
-        allies.AddColumn("Lv");
-        allies.AddColumn("EXP");
-        allies.AddColumn("ToNext");
-        allies.AddColumn("HP");
-        allies.AddColumn("MP");
-        allies.AddColumn("TP");
+        RenderCombatScene(session, current, plannedActions, animationFrame: null);
+    }
+
+    private void RenderCombatStatusWithMap(ICombatSession session, IActor? current, Dictionary<Guid, string>? plannedMap)
+    {
+        // Rebuild a readable planned list from map
+        List<string>? planned = null;
+        if (plannedMap != null)
+            planned = session.Allies.Select(a => plannedMap.ContainsKey(a.Id) ? plannedMap[a.Id] : $"{a.Name}: -").ToList();
+        RenderCombatScene(session, current, planned, animationFrame: null);
+    }
+
+    private Panel BuildAlliesPanel(ICombatSession session, IActor? current)
+    {
+        int w = BarWidth();
+        var alliesSb = new System.Text.StringBuilder();
         foreach (var a in session.Allies)
         {
-            var (hp, mp, tp) = StatTriplet(a);
-            var (exp, toNext, lvl) = LevelTriplet(a);
             bool isCurrent = current != null && a.Id == current.Id;
-            var marker = isCurrent ? "[cyan]>[/]" : " ";
-            var name = isCurrent ? $"[cyan]{a.Name}[/]" : a.Name;
-            allies.AddRow(marker, name, a.EffectiveClass.ToString(), a.Species.ToString(), lvl.ToString(), exp.ToString(), ToNextString(toNext), hp, mp, tp);
+            string marker = isCurrent ? "[cyan]>[/] " : "   ";
+            var jl = a.JobSystem.GetJobLevel(a.EffectiveClass);
+            long toNext = Math.Max(0, jl.ExperienceToNextLevel - jl.Experience);
+            alliesSb.AppendLine($"{marker}[white]{a.Name}[/]  [cyan]{Fit(a.EffectiveClass.ToString(),20)}[/]  {LevelTag(jl.Level)}");
+            var hp = a.GetStat(StatType.Health); var mp = a.GetStat(StatType.Mana); var tp = a.GetStat(StatType.Technical);
+            alliesSb.AppendLine($"{Bar("HP", hp.Current, hp.Modified, w, "red1")}  {Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1")}  {Bar("TP", tp.Current, tp.Modified, w, "orchid")}  {Bar("EXP", jl.Experience, Math.Max(1, jl.ExperienceToNextLevel), w, "yellow3")}  [grey]ToNext:[/] [white]{toNext}[/]");
         }
-
-        AnsiConsole.Write(allies);
-        
-        if (plannedActions != null && plannedActions.Count > 0)
-        {
-            var panel = new Panel(string.Join(Environment.NewLine, plannedActions))
-                .Header("[bold yellow]Planned Actions[/]").BorderColor(Color.Yellow);
-            AnsiConsole.Write(panel);
-        }
+        return new Panel(new Markup(alliesSb.ToString())) { Header = new PanelHeader(" Party ", Justify.Center), Border = BoxBorder.Rounded, BorderStyle = new Style(Color.Green) };
     }
 
-    private static (string hp, string mp, string tp) StatTriplet(IActor a)
+    private Panel BuildEnemiesPanel(ICombatSession session)
     {
-        var h = a.GetStat(StatType.Health);
-        var m = a.GetStat(StatType.Mana);
-        var t = a.GetStat(StatType.Technical);
-        return ($"{h.Current:F0}/{h.Modified:F0}", $"{m.Current:F0}/{m.Modified:F0}", $"{t.Current:F0}/{t.Modified:F0}");
-    }
-
-    private static (long exp, long toNext, int lvl) LevelTriplet(IActor a)
-    {
-        var jl = a.JobSystem.GetJobLevel(a.EffectiveClass);
-        return (jl.Experience, jl.ExperienceToNextLevel, jl.Level);
-    }
-
-    private static string ToNextString(long toNext) => toNext <= 0 ? "-" : toNext.ToString();
-
-    private string DescribePlanned(ICombatAction action)
-    {
-        if (action.ActionType == CombatActionType.UseAbility)
+        int w = BarWidth();
+        var enemiesSb = new System.Text.StringBuilder();
+        foreach (var e in session.Enemies)
         {
-            var ability = (action as CombatAction)?.CustomData as IAbility;
-            var targetName = action.Target != null ? action.Target.Name : action.Actor.Name;
-            if (ability != null)
-            {
-                var cost = (ability as AbilityBase)?.CostAmount ?? 0;
-                var costTag = ability.CostType == AbilityCostType.Mana ? $"[blue]{cost:F0} MP[/]" : ability.CostType == AbilityCostType.Technical ? $"[magenta]{cost:F0} TP[/]" : ability.CostType == AbilityCostType.Health ? $"[red]{cost:F0} HP[/]" : "";
-                return $"Use {ability.Name} on {targetName} {(string.IsNullOrEmpty(costTag)?"":$"({costTag})")}";
-            }
-            return $"Use Ability on {targetName}";
+            enemiesSb.AppendLine($"   [white]{e.Name}[/]  [cyan]{Fit(e.EffectiveClass.ToString(),20)}[/]  {LevelTag(e.Level)}");
+            var hp = e.GetStat(StatType.Health); var mp = e.GetStat(StatType.Mana); var tp = e.GetStat(StatType.Technical);
+            enemiesSb.AppendLine($"{Bar("HP", hp.Current, hp.Modified, w, "red1")}  {Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1")}  {Bar("TP", tp.Current, tp.Modified, w, "orchid")} ");
         }
-        return action.ActionType switch
-        {
-            CombatActionType.Attack => $"Attack {(action.Target != null ? action.Target.Name : "?")}",
-            CombatActionType.Defend => "Defend",
-            CombatActionType.Pass => "Pass",
-            _ => "Act"
-        };
+        return new Panel(new Markup(enemiesSb.ToString())) { Header = new PanelHeader(" Enemies ", Justify.Center), Border = BoxBorder.Rounded, BorderStyle = new Style(Color.Red) };
     }
 
     private void WriteCurrentActorPanel(IActor actor)
     {
-        // Build a clean, compact stats table with abbreviations.
+        // Compact header + resource bars, followed by key stats
+        int w = BarWidth();
+        var jl = actor.JobSystem.GetJobLevel(actor.EffectiveClass);
         var hp = actor.GetStat(StatType.Health);
         var mp = actor.GetStat(StatType.Mana);
         var tp = actor.GetStat(StatType.Technical);
-        var jl = actor.JobSystem.GetJobLevel(actor.EffectiveClass);
 
-        var header = $"[bold cyan]{actor.Name}[/]'s Turn  [grey]Lv[/]: {jl.Level}  [grey]Class[/]: {actor.EffectiveClass}  [grey]Species[/]: {actor.Species}";
+        var header = $"[bold cyan]{actor.Name}[/]'s Turn  [grey]Class[/]: [cyan]{Fit(actor.EffectiveClass.ToString(),20)}[/]  [grey]Species[/]: {actor.Species}  {LevelTag(jl.Level)}";
+
+        var topGrid = new Grid();
+        topGrid.AddColumn(new GridColumn().NoWrap());
+        topGrid.AddColumn(new GridColumn().NoWrap());
+        topGrid.AddColumn(new GridColumn().NoWrap());
+        topGrid.AddColumn(new GridColumn().NoWrap());
+        topGrid.AddRow(
+            new Markup(Bar("HP", hp.Current, hp.Modified, w, "red1")),
+            new Markup(Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1")),
+            new Markup(Bar("TP", tp.Current, tp.Modified, w, "orchid")),
+            new Markup(Bar("EXP", jl.Experience, Math.Max(1, jl.ExperienceToNextLevel), w, "yellow3"))
+        );
+
         var infoTable = new Table().Border(TableBorder.None);
         infoTable.ShowHeaders = false;
         infoTable.AddColumn(""); infoTable.AddColumn(""); infoTable.AddColumn("");
-        // Row 1: HP MP TP
-        infoTable.AddRow($"[red]HP[/] {hp.Current:F0}/{hp.Modified:F0}", $"[blue]MP[/] {mp.Current:F0}/{mp.Modified:F0}", $"[magenta]TP[/] {tp.Current:F0}/{tp.Modified:F0}");
-        // Row 2: STR VIT AGI INT SPR LCK
+        // Row 1: STR VIT AGI
         infoTable.AddRow(
             $"STR {actor.GetStat(StatType.Strength).Modified:F0}",
             $"VIT {actor.GetStat(StatType.Vitality).Modified:F0}",
             $"AGI {actor.GetStat(StatType.Agility).Modified:F0}");
+        // Row 2: INT SPR LCK
         infoTable.AddRow(
             $"INT {actor.GetStat(StatType.Intellect).Modified:F0}",
             $"SPR {actor.GetStat(StatType.Spirit).Modified:F0}",
             $"LCK {actor.GetStat(StatType.Luck).Modified:F0}");
-        // Row 4: Armor Eva Crit% CritDmg AtkPwr SpPwr Speed (split across two rows)
+        // Row 3: Armor Eva Crit%
         infoTable.AddRow(
             $"Armor {actor.GetStat(StatType.Armor).Modified:F0}",
             $"Eva {actor.GetStat(StatType.Evasion).Modified:F0}",
             $"Crit% {actor.GetStat(StatType.CritChance).Modified:F0}");
+        // Row 4: CritDmg AtkPwr SpPwr
         infoTable.AddRow(
             $"CritDmg {actor.GetStat(StatType.CritDamage).Modified:F0}",
             $"AtkPwr {actor.GetStat(StatType.AttackPower).Modified:F0}",
             $"SpPwr {actor.GetStat(StatType.SpellPower).Modified:F0}");
         infoTable.AddRow($"Speed {actor.GetStat(StatType.Speed).Modified:F0}", "", "");
-        // Resists
-        infoTable.AddRow(
-            $"Res:Fire {actor.GetStat(StatType.FireResist).Modified:F0}",
-            $"Res:Cold {actor.GetStat(StatType.ColdResist).Modified:F0}",
-            $"Res:Lightning {actor.GetStat(StatType.LightningResist).Modified:F0}");
-        infoTable.AddRow(
-            $"Res:Poison {actor.GetStat(StatType.PoisonResist).Modified:F0}",
-            $"Res:Arcane {actor.GetStat(StatType.ArcaneResist).Modified:F0}",
-            $"Res:Shadow {actor.GetStat(StatType.ShadowResist).Modified:F0}");
-        infoTable.AddRow($"Res:Holy {actor.GetStat(StatType.HolyResist).Modified:F0}", "", "");
 
-        var panel = new Panel(infoTable).Header(header).BorderColor(Color.Cyan1).Padding(1, 0);
+        var panel = new Panel(new Rows(new IRenderable[] { new Markup(header), topGrid, infoTable }))
+            .Header("[bold cyan]Current Actor[/]")
+            .BorderColor(Color.Cyan1)
+            .Padding(1, 0);
         AnsiConsole.Write(panel);
     }
 
     private void WriteEnemiesTable(IReadOnlyList<IActor> enemies)
     {
+        int w = Math.Clamp(BarWidth(), 12, 18);
         var enemiesTable = new Table().Border(TableBorder.Rounded).Title("[bold red]Select Target[/]");
-        enemiesTable.AddColumn("#"); enemiesTable.AddColumn("Name"); enemiesTable.AddColumn("Class"); enemiesTable.AddColumn("Species"); enemiesTable.AddColumn("Lv"); enemiesTable.AddColumn("HP"); enemiesTable.AddColumn("MP"); enemiesTable.AddColumn("TP");
+        enemiesTable.AddColumn("#"); enemiesTable.AddColumn("Name"); enemiesTable.AddColumn("Class"); enemiesTable.AddColumn("Lv"); enemiesTable.AddColumn("HP"); enemiesTable.AddColumn("MP"); enemiesTable.AddColumn("TP");
         for (int i = 0; i < enemies.Count; i++)
         {
             var e = enemies[i];
             var hp = e.GetStat(StatType.Health); var mp = e.GetStat(StatType.Mana); var tp = e.GetStat(StatType.Technical);
-            enemiesTable.AddRow((i+1).ToString(), e.Name, e.EffectiveClass.ToString(), e.Species.ToString(), e.Level.ToString(), $"{hp.Current:F0}/{hp.Modified:F0}", $"{mp.Current:F0}/{mp.Modified:F0}", $"{tp.Current:F0}/{tp.Modified:F0}");
+            enemiesTable.AddRow(
+                (i+1).ToString(),
+                e.Name,
+                Fit(e.EffectiveClass.ToString(), 20),
+                $"{e.Level}",
+                Bar("HP", hp.Current, hp.Modified, w, "red1"),
+                Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1"),
+                Bar("TP", tp.Current, tp.Modified, w, "orchid")
+            );
         }
         AnsiConsole.Write(enemiesTable);
     }
@@ -340,17 +417,17 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
 
             var choices = new List<string> { "\u2694\ufe0f Attack", "\ud83d\udee1\ufe0f Defend", "\ud83c\udfc3 Pass" };
             if (actor is IHasAbilityBook hasBook && hasBook.AbilityBook.KnownAbilities.Count > 0)
-                choices.Insert(1, "✨ Use Ability");
+                choices.Insert(1, "\u2728 Use Ability");
             if (allowBack) choices.Add("Back");
 
-            var choice = PromptNavigator.PromptChoice(
+            var choice = PromptNavigator.PromptChoice<string>(
                 "Select action:",
                 choices,
                 PromptNavigator.DefaultInputMode,
                 PromptNavigator.DefaultControllerType,
                 renderBackground: () =>
                 {
-                    RenderCombatStatus(session, current: actor, plannedActions: plannedActions);
+                    RenderCombatScene(session, current: actor, plannedActions: plannedActions, animationFrame: null);
                     WriteCurrentActorPanel(actor);
                 });
 
@@ -375,10 +452,10 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                     abilityLabels.Add(label);
                 }
                 if (allowBack) abilityLabels.Add("Back");
-                var chosen = PromptNavigator.PromptChoice(
+                var chosen = PromptNavigator.PromptChoice<string>(
                     "Choose ability:", abilityLabels,
                     PromptNavigator.DefaultInputMode, PromptNavigator.DefaultControllerType,
-                    renderBackground: () => { RenderCombatStatus(session, current: actor, plannedActions: plannedActions); WriteCurrentActorPanel(actor); });
+                    renderBackground: () => { RenderCombatScene(session, current: actor, plannedActions: plannedActions, animationFrame: null); WriteCurrentActorPanel(actor); });
                 if (allowBack && IsBackSelection(chosen)) continue;
                 int aidx = Math.Max(1, ParseLeadingIndex(chosen)) - 1;
                 var ability = known[aidx];
@@ -398,8 +475,8 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 {
                     var labels = session.Allies.Select((al, i) => $"{i+1}. {al.Name}").ToList();
                     if (allowBack) labels.Add("Back");
-                    var ttl = PromptNavigator.PromptChoice("Target ally:", labels, PromptNavigator.DefaultInputMode, PromptNavigator.DefaultControllerType,
-                        renderBackground: () => { RenderCombatStatus(session, current: actor, plannedActions: plannedActions); WriteCurrentActorPanel(actor); });
+                    var ttl = PromptNavigator.PromptChoice<string>("Target ally:", labels, PromptNavigator.DefaultInputMode, PromptNavigator.DefaultControllerType,
+                        renderBackground: () => { RenderCombatScene(session, current: actor, plannedActions: plannedActions, animationFrame: null); WriteCurrentActorPanel(actor); });
                     if (allowBack && IsBackSelection(ttl)) continue;
                     int ti = Math.Max(1, ParseLeadingIndex(ttl)) - 1;
                     targets = new List<IActor> { session.Allies[ti] };
@@ -409,8 +486,8 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                     WriteEnemiesTable(validEnemies);
                     var options = validEnemies.Select((e, idx) => $"{idx+1}. {e.Name} (Lv{e.Level} HP {e.GetStat(StatType.Health).Current:F0}/{e.GetStat(StatType.Health).Modified:F0})").ToList();
                     if (allowBack) options.Add("Back");
-                    var choiceLabel = PromptNavigator.PromptChoice("Target:", options, PromptNavigator.DefaultInputMode, PromptNavigator.DefaultControllerType,
-                        renderBackground: () => { RenderCombatStatus(session, current: actor, plannedActions: plannedActions); WriteCurrentActorPanel(actor); WriteEnemiesTable(validEnemies); });
+                    var choiceLabel = PromptNavigator.PromptChoice<string>("Target:", options, PromptNavigator.DefaultInputMode, PromptNavigator.DefaultControllerType,
+                        renderBackground: () => { RenderCombatScene(session, current: actor, plannedActions: plannedActions, animationFrame: null); WriteCurrentActorPanel(actor); WriteEnemiesTable(validEnemies); });
                     if (allowBack && IsBackSelection(choiceLabel))
                     {
                         // Back to action menu
@@ -431,14 +508,14 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
 
                 var options = validEnemies.Select((e, idx) => $"{idx+1}. {e.Name} (Lv{e.Level} HP {e.GetStat(StatType.Health).Current:F0}/{e.GetStat(StatType.Health).Modified:F0})").ToList();
                 if (allowBack) options.Add("Back");
-                var choiceLabel = PromptNavigator.PromptChoice(
+                var choiceLabel = PromptNavigator.PromptChoice<string>(
                     "Target:",
                     options,
                     PromptNavigator.DefaultInputMode,
                     PromptNavigator.DefaultControllerType,
                     renderBackground: () =>
                     {
-                        RenderCombatStatus(session, current: actor, plannedActions: plannedActions);
+                        RenderCombatScene(session, current: actor, plannedActions: plannedActions, animationFrame: null);
                         WriteCurrentActorPanel(actor);
                         WriteEnemiesTable(validEnemies);
                     });
@@ -528,6 +605,8 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 if (ability.CostType == AbilityCostType.Mana) packet = new DamagePacket(user.Id, new[] { new DamageComponent(DamageType.Arcane, baseAmount) });
                 var remain = t.TakeDamage(packet);
                 var color = session.Allies.Contains(t) ? "green" : "red";
+                // Simple sparkle animation for abilities
+                ShowAbilityAnimation(session, user, t, baseAmount);
                 AnsiConsole.MarkupLine($"[cyan]{user.Name}[/] uses [yellow]{ability.Name}[/] on [{color}]{t.Name}[/] for [yellow]{baseAmount:F0}[/] damage!");
                 if (remain <= 0) AnsiConsole.MarkupLine($"[bold red]\ud83d\udc80 {t.Name} is defeated!\ud83d\udc80[/]");
             }
@@ -539,6 +618,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 double scale = user.GetStat(StatType.Spirit).Modified + 0.5 * user.GetStat(StatType.SpellPower).Modified;
                 int amount = (int)(10 + 0.4 * scale);
                 (t as ActorBase)?.Heal(amount);
+                ShowHealAnimation(session, user, t, amount);
                 AnsiConsole.MarkupLine($"[cyan]{user.Name}[/] uses [yellow]{ability.Name}[/] to heal [green]{t.Name}[/] for [green]{amount}[/] HP!");
             }
         }
@@ -593,8 +673,10 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             double critMult = 1.0 + Math.Max(0.0, attacker.GetStat(StatType.CritDamage).Modified) / 100.0; // e.g. 50 => 1.5x
             critMult = Math.Clamp(critMult, 1.25, 3.0);
             finalDamage *= critMult;
-            AnsiConsole.MarkupLine($"[bold yellow]\ud83d\udca5 CRITICAL HIT! \ud83d\udca5[/]");
         }
+        
+        // Show a simple left-right arrow animation before applying damage
+        ShowAttackAnimation(session, attacker, defender, isCrit, finalDamage);
         
         var packet = new DamagePacket(attacker.Id, new[] { new DamageComponent(DamageType.Physical, finalDamage) }, isCritical: isCrit);
         var remaining = defender.TakeDamage(packet);
@@ -602,6 +684,9 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         var attackerColor = session.Allies.Contains(attacker) ? "green" : "red";
         var defenderColor = session.Allies.Contains(defender) ? "green" : "red";
         
+        if (isCrit)
+            AnsiConsole.MarkupLine("[bold yellow]\ud83d\udca5 CRITICAL HIT! \ud83d\udca5[/]");
+
         AnsiConsole.MarkupLine($"[{attackerColor}]{attacker.Name}[/] attacks [{defenderColor}]{defender.Name}[/] for [yellow]{finalDamage:F0}[/] damage!");
         
         if (remaining <= 0)
@@ -626,47 +711,102 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         var list = new List<string>();
         foreach (var a in planned)
         {
-            if (a != null) list.Add(DescribePlanned(a));
+            if (a != null)
+            {
+                string who = a.Actor?.Name ?? "?";
+                switch (a.ActionType)
+                {
+                    case CombatActionType.Attack:
+                        list.Add($"{who}: Attack {(a.Target != null ? a.Target.Name : "-")}");
+                        break;
+                    case CombatActionType.Defend:
+                        list.Add($"{who}: Defend");
+                        break;
+                    case CombatActionType.Pass:
+                        list.Add($"{who}: Pass");
+                        break;
+                    case CombatActionType.UseAbility:
+                        if (a is CombatAction ca && ca.CustomData is IAbility abil)
+                            list.Add($"{who}: {abil.Name}{(a.Target != null ? $" -> {a.Target.Name}" : "")}");
+                        else
+                            list.Add($"{who}: Use Ability");
+                        break;
+                    default:
+                        list.Add($"{who}: Action");
+                        break;
+                }
+            }
         }
         return list;
     }
 
-    private void RenderCombatStatusWithMap(ICombatSession session, IActor? current, Dictionary<Guid, string>? plannedMap)
+    // === Animations ===
+    private void ShowAttackAnimation(ICombatSession session, IActor attacker, IActor defender, bool isCrit, double dmg)
     {
-        AnsiConsole.WriteLine();
-        var allies = new Table().Border(TableBorder.Rounded).Title("[bold green]Party[/]");
-        allies.AddColumn(" ");
-        allies.AddColumn("Name");
-        allies.AddColumn("Class");
-        allies.AddColumn("Species");
-        allies.AddColumn("Lv");
-        allies.AddColumn("EXP");
-        allies.AddColumn("ToNext");
-        allies.AddColumn("HP");
-        allies.AddColumn("MP");
-        allies.AddColumn("TP");
-        allies.AddColumn("Planned");
-        foreach (var a in session.Allies)
+        bool attackerIsAlly = session.Allies.Any(a => a.Id == attacker.Id);
+        int steps = isCrit ? 18 : 12;
+        int width = Math.Clamp(Console.WindowWidth - 8, 30, 80);
+        for (int i = 0; i < steps; i++)
         {
-            var (hp, mp, tp) = StatTriplet(a);
-            var (exp, toNext, lvl) = LevelTriplet(a);
-            bool isCurrent = current != null && a.Id == current.Id;
-            var marker = isCurrent ? "[cyan]>[/]" : " ";
-            var name = isCurrent ? $"[cyan]{a.Name}[/]" : a.Name;
-            var planned = plannedMap != null && plannedMap.TryGetValue(a.Id, out var desc) ? desc : "-";
-            allies.AddRow(marker, name, a.EffectiveClass.ToString(), a.Species.ToString(), lvl.ToString(), exp.ToString(), ToNextString(toNext), hp, mp, tp, planned);
+            double t = (double)i / Math.Max(1, steps - 1);
+            int col = attackerIsAlly ? (int)Math.Round(t * (width - 3)) : (int)Math.Round((1 - t) * (width - 3));
+            string arrow = isCrit ? "[bold yellow]\u2728[/]" : "[yellow]\u27a1\ufe0f[/]"; // ✨ or ➡️
+            var attackerColor = attackerIsAlly ? "green" : "red";
+            var defenderColor = attackerIsAlly ? "red" : "green";
+            string line = new string(' ', Math.Max(0, col)) + arrow;
+            string cap = $"[{attackerColor}]{attacker.Name}[/] -> [{defenderColor}]{defender.Name}[/]  [yellow]{dmg:F0}[/]";
+            string frame = line + "\n" + cap;
+            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: frame);
+            Thread.Sleep(isCrit ? 55 : 70);
         }
-        AnsiConsole.Write(allies);
+        // Impact frame
+        string impact = "[bold yellow]\ud83d\udca5 IMPACT! \ud83d\udca5[/]";
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: impact);
+        Thread.Sleep(120);
     }
 
-    private Dictionary<Guid, string> BuildPlannedMap(ICombatAction?[] planned, List<IActor> allies)
+    private void ShowAbilityAnimation(ICombatSession session, IActor user, IActor target, double amount)
     {
-        var dict = new Dictionary<Guid, string>();
-        for (int i = 0; i < allies.Count && i < planned.Length; i++)
+        bool userIsAlly = session.Allies.Any(a => a.Id == user.Id);
+        var targetColor = userIsAlly ? "red" : "green";
+        string[] glyphs = new[] { "\u2727", "\u2728", "\u272f", "\u2737", "\u2740" }; // sparkles
+        for (int i = 0; i < 8; i++)
         {
-            var act = planned[i];
-            if (act != null) dict[allies[i].Id] = DescribePlanned(act);
+            string g = glyphs[i % glyphs.Length];
+            string frame = $"[yellow]{g}[/] [cyan]{user.Name}[/] -> [{targetColor}]{target.Name}[/] [yellow]{amount:F0}[/]";
+            RenderCombatScene(session, null, null, frame);
+            Thread.Sleep(60);
         }
-        return dict;
+    }
+
+    private void ShowHealAnimation(ICombatSession session, IActor user, IActor target, int amount)
+    {
+        for (int i = 0; i < 6; i++)
+        {
+            string hearts = new string('\u2665', 1 + (i % 3)); // ♥
+            string frame = $"[green]{hearts}[/] [cyan]{user.Name}[/] heals [green]{target.Name}[/] for [green]{amount}[/]";
+            RenderCombatScene(session, null, null, frame);
+            Thread.Sleep(70);
+        }
+    }
+
+    private void RegenerateResources(IEnumerable<IActor> actors, double mpPct, double tpPct)
+    {
+        foreach (var a in actors)
+        {
+            if (a is not ActorBase ab) continue;
+            if (ab.TryGetStat(StatType.Mana, out var mp))
+            {
+                var sv = (Fub.Implementations.Stats.StatValue)mp;
+                var delta = Math.Max(1.0, sv.Modified * mpPct);
+                sv.ApplyDelta(delta);
+            }
+            if (ab.TryGetStat(StatType.Technical, out var tp))
+            {
+                var sv = (Fub.Implementations.Stats.StatValue)tp;
+                var delta = Math.Max(1.0, sv.Modified * tpPct);
+                sv.ApplyDelta(delta);
+            }
+        }
     }
 }
