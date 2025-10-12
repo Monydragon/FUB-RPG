@@ -58,6 +58,7 @@ class Program
     private static Party CharacterCreation(InputMode mode, ControllerType controllerType)
     {
         var members = new List<IActor>();
+        const int maxPartySize = 4;
         while (true)
         {
             Console.Clear();
@@ -74,17 +75,32 @@ class Program
                     table.AddRow(m.Name, m.Species.ToString(), m.Class.ToString());
                 AnsiConsole.Write(table);
             }
+
+            // Build dynamic options based on party state
+            var options = new List<string>();
+            if (members.Count < maxPartySize) options.Add("Add Member");
+            
+            if (members.Count > 0)
+            {
+                if (members.Count >= maxPartySize)
+                {
+                    options.Add("Finish");
+                }
+                options.Add("Remove Member");
+                if (members.Count > 1) options.Add("Set Leader");
+            }
+
             var choice = PromptNavigator.PromptChoice(
                 "Choose an option:",
-                new[] { "Add Member", "Remove Member", "Set Leader", "Finish" },
+                options,
                 mode,
                 controllerType);
 
             if (choice == "Add Member")
             {
-                if (members.Count >= 4)
+                if (members.Count >= maxPartySize)
                 {
-                    AnsiConsole.MarkupLine("[red]Party is full (max 4).[/]");
+                    AnsiConsole.MarkupLine($"[red]Party is full (max {maxPartySize}).[/]");
                     InputWaiter.WaitForAny(mode);
                     continue;
                 }
@@ -103,7 +119,7 @@ class Program
             }
             else if (choice == "Set Leader")
             {
-                if (members.Count == 0) continue;
+                if (members.Count < 2) continue;
                 var name = PromptNavigator.PromptChoice(
                     "Set who as leader?",
                     members.Select(m => m.Name).ToList(),
@@ -146,7 +162,9 @@ class Program
             controllerType);
 
         var profile = new PlayerProfile(name);
-        var actor = new PlayerActor(name, species, baseClass, profile, 0, 0);
+        // Build combined starting stats from species + class
+        var stats = ActorStatPresets.Combine(species, baseClass);
+        var actor = new PlayerActor(name, species, baseClass, profile, 0, 0, stats);
         return actor;
     }
 }

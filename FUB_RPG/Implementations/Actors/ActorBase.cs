@@ -1,9 +1,9 @@
 ﻿// Added
 // Added
-using Fub.Implementations.Inventory;
-// Added
-using System.Linq;
-using System.Collections.Generic;
+// Removed unnecessary using directives flagged by analyzer
+// using Fub.Implementations.Inventory;
+// using System.Linq;
+// using System.Collections.Generic;
 using Fub.Enums;
 using Fub.Implementations.Core;
 using Fub.Implementations.Items.Equipment;
@@ -17,12 +17,14 @@ using Fub.Interfaces.Items.Equipment;
 using Fub.Interfaces.Items.Weapons;
 using Fub.Interfaces.Progression;
 using Fub.Interfaces.Stats;
+using Fub.Interfaces.Abilities;
+using Fub.Implementations.Abilities;
 
 // Use centralized mappings
 
 namespace Fub.Implementations.Actors;
 
-public abstract class ActorBase : EntityBase, IActor
+public abstract class ActorBase : EntityBase, IActor, IHasAbilityBook
 {
     private Func<int,int,bool>? _canMove;
     protected readonly StatsCollection StatsInternal;
@@ -41,6 +43,7 @@ public abstract class ActorBase : EntityBase, IActor
     public IReadOnlyDictionary<StatType, IStatValue> AllStats => StatsInternal.AllStats;
 
     public ActorClass EffectiveClass => EvaluateEffectiveClass();
+    public IAbilityBook AbilityBook { get; }
 
     protected ActorBase(string name, Species species, ActorClass @class, int startX, int startY) : base(name)
     {
@@ -49,9 +52,11 @@ public abstract class ActorBase : EntityBase, IActor
         X = startX;
         Y = startY;
         JobSystem = new JobSystem();
-        Inventory = new Inventory.Inventory(1000);
+        Inventory = new Fub.Implementations.Inventory.Inventory(1000);
         StatsInternal = InitializeStats(ActorStatPresets.Default());
         EquipmentManager = new EquipmentManager();
+        AbilityBook = new AbilityBook();
+        LearnStartingAbilities();
     }
 
     /// <summary>
@@ -65,9 +70,23 @@ public abstract class ActorBase : EntityBase, IActor
         X = startX;
         Y = startY;
         JobSystem = new JobSystem();
-        Inventory = new Inventory.Inventory(1000);
+        Inventory = new Fub.Implementations.Inventory.Inventory(1000);
         StatsInternal = InitializeStats(customStats);
         EquipmentManager = new EquipmentManager();
+        AbilityBook = new AbilityBook();
+        LearnStartingAbilities();
+    }
+
+    private void LearnStartingAbilities()
+    {
+        var lvl = JobSystem.GetJobLevel(EffectiveClass).Level;
+        foreach (var u in ClassAbilityLearnset.GetUnlocks(EffectiveClass))
+        {
+            if (u.Level <= lvl)
+            {
+                AbilityBook.Learn(u.Factory());
+            }
+        }
     }
 
     private StatsCollection InitializeStats(Dictionary<StatType, double> statValues)
@@ -136,5 +155,14 @@ public abstract class ActorBase : EntityBase, IActor
         return ClassWeaponMappings.TryGetClassForWeaponType(mainHand.WeaponType, out var mapped)
             ? mapped
             : Class;
+    }
+
+    public bool TrySpend(StatType resource, double amount)
+    {
+        if (!StatsInternal.TryGetStat(resource, out var stat)) return false;
+        var sv = (StatValue)stat;
+        if (sv.Current < amount) return false;
+        sv.ApplyDelta(-amount);
+        return true;
     }
 }

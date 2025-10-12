@@ -17,6 +17,8 @@ using Fub.Interfaces.Map;
 using Fub.Implementations.Input;
 using Fub.Interfaces.Items.Weapons;
 using Fub.Implementations.Map.Objects; // Added for portals
+using Fub.Implementations.Abilities;
+using Fub.Interfaces.Abilities;
 
 namespace Fub.Implementations.Game;
 
@@ -574,7 +576,7 @@ public sealed class GameLoop : IGameLoop
         int sepLines = 1;
         int hudLines = 2; // Summary lines (no separate leader stat line)
         int partyLines = _state.Party.MaxSize; // reserve fixed space to avoid overlap
-        int maxLogLines = 6; // fixed reserve for log area
+        int maxLogLines = 6; // fixed reserve for log area at bottom
         int actionsLines = 1;
 
         // Compute rows
@@ -599,32 +601,54 @@ public sealed class GameLoop : IGameLoop
         WriteSection(row, hudLines, sbHud.ToString());
         row += hudLines;
 
-        // Party list (unified, with leader icon)
+        // Party list (aligned, with leader icon)
         var sbParty = new StringBuilder();
         foreach (var m in _state.Party.Members)
         {
-            string leaderIcon = m.Id == leader.Id ? "[yellow]★[/] " : "   ";
-            var mh = m.GetStat(StatType.Health);
-            var mm = m.GetStat(StatType.Mana);
-            var mt = m.GetStat(StatType.Technical);
-            sbParty.AppendLine($"{leaderIcon}{m.Name} Lv{m.Level} {m.EffectiveClass}  [red]HP[/]: {mh.Current:F0}/{mh.Modified:F0}  [blue]MP[/]: {mm.Current:F0}/{mm.Modified:F0}  [magenta]TP[/]: {mt.Current:F0}/{mt.Modified:F0}");
+            sbParty.AppendLine(FormatPartyLine(m, leader.Id));
         }
         WriteSection(row, partyLines, sbParty.ToString());
         row += partyLines;
 
-        // Separator before log
+        // Separator before actions/log block
         WriteSection(row, sepLines, sep + "\n");
         row += sepLines;
 
-        // Log section (reserve fixed space)
+        // Actions (above log)
+        string actions = BuildContextActionsString(map, leader);
+        WriteSection(row, actionsLines, actions + "\n");
+        row += actionsLines;
+
+        // Log at the very bottom
         var logText = RenderLogAsString(maxLogLines);
         WriteSection(row, maxLogLines, logText);
         row += maxLogLines;
 
-        // Actions
-        string actions = BuildContextActionsString(map, leader);
-        WriteSection(row, actionsLines, actions + "\n");
-        // no need to pad remainder; sections handle clearing
+        // Clear out any leftover lines below our last section to avoid overlap
+        ClearRemainingRows(row);
+    }
+
+    private string FormatPartyLine(IActor actor, Guid leaderId)
+    {
+        // Fixed-width columns for alignment
+        string leaderIcon = actor.Id == leaderId ? "[yellow]★[/] " : "   ";
+        string name = TruncPad(actor.Name, 12);
+        string job = TruncPad(actor.EffectiveClass.ToString(), 12);
+        string lvl = $"Lv{actor.Level}".PadRight(4);
+        var hp = actor.GetStat(StatType.Health);
+        var mp = actor.GetStat(StatType.Mana);
+        var tp = actor.GetStat(StatType.Technical);
+        string hpStr = $"[red]HP[/]: {hp.Current:F0}/{hp.Modified:F0}".PadRight(18);
+        string mpStr = $"[blue]MP[/]: {mp.Current:F0}/{mp.Modified:F0}".PadRight(18);
+        string tpStr = $"[magenta]TP[/]: {tp.Current:F0}/{tp.Modified:F0}".PadRight(18);
+        return $"{leaderIcon}{name} {lvl} {job}  {hpStr} {mpStr} {tpStr}";
+    }
+
+    private static string TruncPad(string value, int width)
+    {
+        if (string.IsNullOrEmpty(value)) return new string(' ', width);
+        var trimmed = value.Length > width ? value.Substring(0, width) : value;
+        return trimmed.PadRight(width);
     }
 
     private void WriteSection(int startRow, int height, string markup)
@@ -638,7 +662,7 @@ public sealed class GameLoop : IGameLoop
             {
                 if (startRow + i >= Console.WindowHeight) break;
                 Console.SetCursorPosition(0, startRow + i);
-                Console.Write(new string(' ', System.Math.Max(0, width - 1)));
+                Console.Write(new string(' ', width));
             }
             if (startRow >= Console.WindowHeight) return;
             // Limit content to at most height lines
@@ -653,7 +677,23 @@ public sealed class GameLoop : IGameLoop
         }
         catch
         {
-            // In case of cursor errors (e.g., window resized), fallback to clear and full redraw next frame.
+            _uiInitialized = false;
+        }
+    }
+
+    private void ClearRemainingRows(int startRow)
+    {
+        try
+        {
+            int width = Math.Max(1, Console.WindowWidth);
+            for (int y = startRow; y < Console.WindowHeight; y++)
+            {
+                Console.SetCursorPosition(0, y);
+                Console.Write(new string(' ', width));
+            }
+        }
+        catch
+        {
             _uiInitialized = false;
         }
     }
@@ -763,6 +803,10 @@ public sealed class GameLoop : IGameLoop
     {
         if (enemies.Count == 0) return;
         var enemyActors = enemies.Where(e => e.Actor != null).Select(e => e.Actor!).ToList();
+
+        // Capture pre-combat levels per ally
+        var preLevels = _state.Party.Members.ToDictionary(a => a.Id, a => a.JobSystem.GetJobLevel(a.EffectiveClass).Level);
+
         var session = new CombatSession(_state.Party.Members, enemyActors);
         _combatResolver.BeginCombat(session);
         while (session.IsActive)
@@ -771,14 +815,35 @@ public sealed class GameLoop : IGameLoop
             session.UpdateOutcome();
         }
         _combatResolver.EndCombat(session);
+
+        _uiInitialized = false;
+
         if (session.Outcome == CombatOutcome.Victory)
         {
             long totalExp = enemyActors.Sum(e => (long)(50 * System.Math.Pow(e.Level, 1.5)));
             foreach (var ally in _state.Party.Members.Where(a => a.GetStat(StatType.Health).Current > 0))
             {
                 var currentJob = ally.EffectiveClass;
+                var before = preLevels[ally.Id];
                 bool leveled = ally.JobSystem.AddExperience(currentJob, totalExp);
-                if (leveled) AddLog($"{ally.Name}'s {currentJob} reached level {ally.JobSystem.GetJobLevel(currentJob).Level}!");
+                var after = ally.JobSystem.GetJobLevel(currentJob).Level;
+                if (leveled) AddLog($"{ally.Name}'s {currentJob} reached level {after}!");
+
+                // Learn class abilities for each level gained
+                if (after > before)
+                {
+                    for (int lvl = before + 1; lvl <= after; lvl++)
+                    {
+                        foreach (var unlock in ClassAbilityLearnset.GetUnlocks(currentJob))
+                        {
+                            if (unlock.Level == lvl && ally is IHasAbilityBook hab)
+                            {
+                                var learned = hab.AbilityBook.Learn(unlock.Factory());
+                                if (learned) AddLog($"{ally.Name} learned {hab.AbilityBook.KnownAbilities[^1].Name}!");
+                            }
+                        }
+                    }
+                }
             }
             foreach (var enemy in enemies) map.RemoveObject(enemy.Id);
             AddLog("Victory!");

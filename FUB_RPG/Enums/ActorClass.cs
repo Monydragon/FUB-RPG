@@ -7,7 +7,6 @@ public enum ActorClass
 
     // Combat - Melee
     Warrior,
-    Fighter,        // D&D
     Cleric,         // D&D
     Paladin,        // D&D/FFXIV
     DarkKnight,     // FFXIV

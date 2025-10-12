@@ -6,6 +6,6 @@ public enum AbilityCostType
     Mana,
     Stamina,
     Health,
+    Technical,
     CooldownOnly
 }
-
