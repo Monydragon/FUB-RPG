@@ -837,6 +837,7 @@ public sealed class GameLoop : IGameLoop
         string rest = new string('\u2500', Math.Max(0, empty));
         string value = $"{current:0}/{max:0}";
         return $"[{color}]{label}[/]: [{color}]{fill}[/][grey]{rest}[/] [{color}]{value}[/]";
+
     }
 
     private void ShowVictoryResults(ICombatSession session, List<IActor> enemyActors, Dictionary<Guid,int> preLevels)

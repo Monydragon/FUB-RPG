@@ -16,6 +16,12 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
     private readonly System.Random _rng = new();
     private readonly Dictionary<Guid, bool> _defendingActors = new();
 
+    // Transient UI flash state for hit/heal feedback
+    private Guid? _flashEnemyId;
+    private int _flashEnemyTicks;
+    private Guid? _flashAllyId;
+    private int _flashAllyTicks;
+
     // === UI helpers: bar rendering consistent with exploration HUD ===
     private static string Bar(string label, double current, double max, int width, string color)
     {
@@ -284,14 +290,19 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         foreach (var a in session.Allies)
         {
             bool isCurrent = current != null && a.Id == current.Id;
+            bool isFlashing = _flashAllyId.HasValue && _flashAllyId.Value == a.Id && _flashAllyTicks > 0;
             string marker = isCurrent ? "[cyan]>[/] " : "   ";
             var jl = a.JobSystem.GetJobLevel(a.EffectiveClass);
             long toNext = Math.Max(0, jl.ExperienceToNextLevel - jl.Experience);
-            alliesSb.AppendLine($"{marker}[white]{a.Name}[/]  [cyan]{Fit(a.EffectiveClass.ToString(),20)}[/]  {LevelTag(jl.Level)}");
+            string nameLine = isFlashing
+                ? $"{marker}[bold green]{a.Name}[/]  [cyan]{Fit(a.EffectiveClass.ToString(),20)}[/]  {LevelTag(jl.Level)} [green]\u2665 HEAL[/]"
+                : $"{marker}[white]{a.Name}[/]  [cyan]{Fit(a.EffectiveClass.ToString(),20)}[/]  {LevelTag(jl.Level)}";
+            alliesSb.AppendLine(nameLine);
             var hp = a.GetStat(StatType.Health); var mp = a.GetStat(StatType.Mana); var tp = a.GetStat(StatType.Technical);
             alliesSb.AppendLine($"{Bar("HP", hp.Current, hp.Modified, w, "red1")}  {Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1")}  {Bar("TP", tp.Current, tp.Modified, w, "orchid")}  {Bar("EXP", jl.Experience, Math.Max(1, jl.ExperienceToNextLevel), w, "yellow3")}  [grey]ToNext:[/] [white]{toNext}[/]");
         }
-        return new Panel(new Markup(alliesSb.ToString())) { Header = new PanelHeader(" Party ", Justify.Center), Border = BoxBorder.Rounded, BorderStyle = new Style(Color.Green) };
+        var borderColor = (_flashAllyTicks > 0 && (_flashAllyTicks % 2 == 0)) ? Color.GreenYellow : Color.Green;
+        return new Panel(new Markup(alliesSb.ToString())) { Header = new PanelHeader(" Party ", Justify.Center), Border = BoxBorder.Rounded, BorderStyle = new Style(borderColor) };
     }
 
     private Panel BuildEnemiesPanel(ICombatSession session)
@@ -300,11 +311,17 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         var enemiesSb = new System.Text.StringBuilder();
         foreach (var e in session.Enemies)
         {
-            enemiesSb.AppendLine($"   [white]{e.Name}[/]  [cyan]{Fit(e.EffectiveClass.ToString(),20)}[/]  {LevelTag(e.Level)}");
+            bool isFlashing = _flashEnemyId.HasValue && _flashEnemyId.Value == e.Id && _flashEnemyTicks > 0;
+            string nameLine = isFlashing
+                ? $"   [bold red]{e.Name}[/]  [cyan]{Fit(e.EffectiveClass.ToString(),20)}[/]  {LevelTag(e.Level)}  [yellow]\ud83d\udca5 HIT![/]"
+                : $"   [white]{e.Name}[/]  [cyan]{Fit(e.EffectiveClass.ToString(),20)}[/]  {LevelTag(e.Level)}";
+            enemiesSb.AppendLine(nameLine);
             var hp = e.GetStat(StatType.Health); var mp = e.GetStat(StatType.Mana); var tp = e.GetStat(StatType.Technical);
-            enemiesSb.AppendLine($"{Bar("HP", hp.Current, hp.Modified, w, "red1")}  {Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1")}  {Bar("TP", tp.Current, tp.Modified, w, "orchid")} ");
+            string hpColor = isFlashing ? "yellow1" : "red1";
+            enemiesSb.AppendLine($"{Bar("HP", hp.Current, hp.Modified, w, hpColor)}  {Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1")}  {Bar("TP", tp.Current, tp.Modified, w, "orchid")} ");
         }
-        return new Panel(new Markup(enemiesSb.ToString())) { Header = new PanelHeader(" Enemies ", Justify.Center), Border = BoxBorder.Rounded, BorderStyle = new Style(Color.Red) };
+        var borderColor = (_flashEnemyTicks > 0 && (_flashEnemyTicks % 2 == 0)) ? Color.Yellow : Color.Red;
+        return new Panel(new Markup(enemiesSb.ToString())) { Header = new PanelHeader(" Enemies ", Justify.Center), Border = BoxBorder.Rounded, BorderStyle = new Style(borderColor) };
     }
 
     private void WriteCurrentActorPanel(IActor actor)
@@ -744,50 +761,91 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
     private void ShowAttackAnimation(ICombatSession session, IActor attacker, IActor defender, bool isCrit, double dmg)
     {
         bool attackerIsAlly = session.Allies.Any(a => a.Id == attacker.Id);
-        int steps = isCrit ? 18 : 12;
-        int width = Math.Clamp(Console.WindowWidth - 8, 30, 80);
-        for (int i = 0; i < steps; i++)
+        bool defenderIsEnemy = session.Enemies.Any(e => e.Id == defender.Id);
+        var attackerColor = attackerIsAlly ? "green" : "red";
+        var defenderColor = attackerIsAlly ? "red" : "green";
+
+        // 1) Preparation
+        string prep = $"[bold {attackerColor}]{attacker.Name}[/] gathers themselves...";
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: prep);
+        Thread.Sleep(350);
+
+        // 2) Strike and set flash on the correct panel for defender
+        string strike = $"[bold]{attacker.Name}[/] [yellow]\u27A1\ufe0f[/] [{defenderColor}]{defender.Name}[/] for [yellow]{dmg:F0}[/] damage!";
+        if (defenderIsEnemy) { _flashEnemyId = defender.Id; _flashEnemyTicks = isCrit ? 6 : 4; }
+        else { _flashAllyId = defender.Id; _flashAllyTicks = isCrit ? 6 : 4; }
+        int loops = isCrit ? 6 : 4;
+        for (int i = 0; i < loops; i++)
         {
-            double t = (double)i / Math.Max(1, steps - 1);
-            int col = attackerIsAlly ? (int)Math.Round(t * (width - 3)) : (int)Math.Round((1 - t) * (width - 3));
-            string arrow = isCrit ? "[bold yellow]\u2728[/]" : "[yellow]\u27a1\ufe0f[/]"; // ✨ or ➡️
-            var attackerColor = attackerIsAlly ? "green" : "red";
-            var defenderColor = attackerIsAlly ? "red" : "green";
-            string line = new string(' ', Math.Max(0, col)) + arrow;
-            string cap = $"[{attackerColor}]{attacker.Name}[/] -> [{defenderColor}]{defender.Name}[/]  [yellow]{dmg:F0}[/]";
-            string frame = line + "\n" + cap;
-            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: frame);
-            Thread.Sleep(isCrit ? 55 : 70);
+            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: strike);
+            Thread.Sleep(isCrit ? 140 : 110);
+            if (defenderIsEnemy) _flashEnemyTicks = Math.Max(0, _flashEnemyTicks - 1); else _flashAllyTicks = Math.Max(0, _flashAllyTicks - 1);
         }
-        // Impact frame
-        string impact = "[bold yellow]\ud83d\udca5 IMPACT! \ud83d\udca5[/]";
+
+        // 3) Impact emphasis
+        string impact = isCrit ? "[bold yellow]\ud83d\udca5 CRITICAL STRIKE! \ud83d\udca5[/]" : "[yellow]\ud83d\udca5 IMPACT! \ud83d\udca5[/]";
         RenderCombatScene(session, current: null, plannedActions: null, animationFrame: impact);
-        Thread.Sleep(120);
+        Thread.Sleep(isCrit ? 520 : 380);
+
+        // 4) Aftermath snapshot so bars update nicely
+        string aftermath = $"[{attackerColor}]{attacker.Name}[/] -> [{defenderColor}]{defender.Name}[/]  [yellow]{dmg:F0}[/]";
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: aftermath);
+        Thread.Sleep(240);
+
+        // Clear flash state
+        if (defenderIsEnemy) { _flashEnemyId = null; _flashEnemyTicks = 0; } else { _flashAllyId = null; _flashAllyTicks = 0; }
     }
 
     private void ShowAbilityAnimation(ICombatSession session, IActor user, IActor target, double amount)
     {
         bool userIsAlly = session.Allies.Any(a => a.Id == user.Id);
+        var userColor = userIsAlly ? "green" : "red";
         var targetColor = userIsAlly ? "red" : "green";
-        string[] glyphs = new[] { "\u2727", "\u2728", "\u272f", "\u2737", "\u2740" }; // sparkles
-        for (int i = 0; i < 8; i++)
+
+        string cast = "[yellow]\u2728[/] [cyan]" + user.Name + "[/] channels power...";
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: cast);
+        Thread.Sleep(340);
+
+        // Effect frame + brief flash on target if damaging
+        string effect = $"[cyan]{user.Name}[/] unleashes power at [{targetColor}]{target.Name}[/]!";
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: effect);
+        Thread.Sleep(280);
+
+        // If the target is an enemy from allies' ability, flash enemy panel; else flash allies panel
+        if (userIsAlly && session.Enemies.Any(e => e.Id == target.Id)) { _flashEnemyId = target.Id; _flashEnemyTicks = 4; }
+        else if (!userIsAlly && session.Allies.Any(a => a.Id == target.Id)) { _flashAllyId = target.Id; _flashAllyTicks = 4; }
+
+        string resolve = $"[yellow]\u2728[/] [{targetColor}]{target.Name}[/] affected for [yellow]{amount:F0}[/]!";
+        for (int i = 0; i < 4; i++)
         {
-            string g = glyphs[i % glyphs.Length];
-            string frame = $"[yellow]{g}[/] [cyan]{user.Name}[/] -> [{targetColor}]{target.Name}[/] [yellow]{amount:F0}[/]";
-            RenderCombatScene(session, null, null, frame);
-            Thread.Sleep(60);
+            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: resolve);
+            Thread.Sleep(120);
+            if (_flashEnemyTicks > 0) _flashEnemyTicks--; if (_flashAllyTicks > 0) _flashAllyTicks--;
         }
+        _flashEnemyId = null; _flashEnemyTicks = 0; _flashAllyId = null; _flashAllyTicks = 0;
     }
 
     private void ShowHealAnimation(ICombatSession session, IActor user, IActor target, int amount)
     {
-        for (int i = 0; i < 6; i++)
+        // Pleasant heal sequence with green pulse on allies panel
+        string prepare = $"[green]\u2665[/] [cyan]{user.Name}[/] begins to heal...";
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: prepare);
+        Thread.Sleep(320);
+
+        _flashAllyId = target.Id; _flashAllyTicks = 4;
+        string healLine = $"[cyan]{user.Name}[/] heals [green]{target.Name}[/] for [green]{amount}[/] HP!";
+        for (int i = 0; i < 4; i++)
         {
-            string hearts = new string('\u2665', 1 + (i % 3)); // ♥
-            string frame = $"[green]{hearts}[/] [cyan]{user.Name}[/] heals [green]{target.Name}[/] for [green]{amount}[/]";
-            RenderCombatScene(session, null, null, frame);
-            Thread.Sleep(70);
+            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: healLine);
+            Thread.Sleep(140);
+            _flashAllyTicks = Math.Max(0, _flashAllyTicks - 1);
         }
+
+        string glow = $"[green]\u2665\u2665\u2665[/] [{target.Name}] feels renewed";
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: glow);
+        Thread.Sleep(300);
+
+        _flashAllyId = null; _flashAllyTicks = 0;
     }
 
     private void RegenerateResources(IEnumerable<IActor> actors, double mpPct, double tpPct)
