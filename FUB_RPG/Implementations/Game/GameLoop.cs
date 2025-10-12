@@ -43,7 +43,7 @@ public sealed class GameLoop : IGameLoop
         _state = state;
         _mapGenerator = mapGenerator;
         _renderer = renderer;
-        _combatResolver = new TurnBasedCombatResolver();
+        _combatResolver = new TurnBasedCombatResolver(_state);
     }
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
@@ -75,12 +75,18 @@ public sealed class GameLoop : IGameLoop
     {
         var choice = PromptNavigator.PromptChoice(
             "[bold cyan]Main Menu[/]",
-            new List<string> { "New Game", "Quit" },
+            new List<string> { "New Game", "Settings", "Quit" },
             _state);
 
         if (choice == "Quit")
         {
             _state.SetPhase(GamePhase.GameOver);
+            return;
+        }
+
+        if (choice == "Settings")
+        {
+            ShowSettingsMenu();
             return;
         }
 
@@ -335,12 +341,13 @@ public sealed class GameLoop : IGameLoop
 
     private void ShowPartyMenu()
     {
-        var choices = new List<string> { "Inspect Member", "View Stats", "Change Leader", "Manage Equipment", "Back" };
+        var choices = new List<string> { "Inspect Member", "View Stats", "Change Leader", "Manage Equipment", "Settings", "Back" };
         var choice = PromptNavigator.PromptChoice("[bold cyan]Party Menu[/]", choices, _state);
         if (choice == "Inspect Member") InspectMember();
         else if (choice == "View Stats") ShowPartyStats();
         else if (choice == "Change Leader") ChangeLeader();
         else if (choice == "Manage Equipment") ShowEquipmentMenu();
+        else if (choice == "Settings") ShowSettingsMenu();
         _uiInitialized = false; // redraw cleanly
     }
 
@@ -800,13 +807,28 @@ public sealed class GameLoop : IGameLoop
         if (members.Count == 0) return "[grey]No party members[/]\n";
         int consoleWidth = Math.Max(80, Console.WindowWidth);
         int barWidth = Math.Clamp((consoleWidth - 10) / 4 - 10, 12, 24);
+
+        // Dynamically size name/species/class columns to reduce truncation
+        // Visible chars per line: star(3) + name + 2 + species + 2 + class + 2 + lvl(6) = sum + 15
+        int minName = 16, minSpecies = 12, minClass = 16;
+        int fixedOverhead = 15 + 0; // see formula above
+        int baseTotal = minName + minSpecies + minClass + fixedOverhead;
+        int extra = Math.Max(0, consoleWidth - baseTotal);
+        // Distribute extra width: favor class, then name, then species
+        int addClass = Math.Min(extra, 8); extra -= addClass; // up to +8
+        int addName = Math.Min(extra, 6);  extra -= addName;  // up to +6
+        int addSpec = Math.Min(extra, 4);  extra -= addSpec;  // up to +4
+        int nameW = minName + addName;
+        int speciesW = minSpecies + addSpec;
+        int classW = minClass + addClass;
+
         var sb = new StringBuilder();
         foreach (var m in members)
         {
-            string star = m.Id == leaderId ? "[yellow]★[/] " : "   ";
-            string name = TruncPad(m.Name, 16);
-            string species = TruncPad(m.Species.ToString(), 10);
-            string cls = TruncPad(m.EffectiveClass.ToString(), 12);
+            string star = m.Id == leaderId ? "[yellow]★[/] " : "  ";
+            string name = TruncPad(m.Name, nameW);
+            string species = TruncPad(m.Species.ToString(), speciesW);
+            string cls = TruncPad(m.EffectiveClass.ToString(), classW);
             string lvl = $"Lv {m.Level}".PadRight(6);
 
             sb.AppendLine($"{star}[white]{name}[/]  [green]{species}[/]  [cyan]{cls}[/]  [yellow]{lvl}[/]");
@@ -1257,5 +1279,19 @@ public sealed class GameLoop : IGameLoop
         var npc = npcs.First();
         var npcName = npc.Actor?.Name ?? "NPC";
         AddLog($"{npcName}: \"Greetings, traveler! The dungeon is dangerous. Stay safe!\"");
+    }
+
+    private void ShowSettingsMenu()
+    {
+        var options = new List<string> { "Slow", "Normal", "Fast", "Instant", "Back" };
+        var current = _state.CombatSpeed.ToString();
+        AnsiConsole.MarkupLine($"[bold cyan]Settings[/]  [grey](Current Speed: [yellow]{current}[/])[/]");
+        var pick = PromptNavigator.PromptChoice("Combat Text/Action Speed:", options, _state);
+        if (pick == "Back") return;
+        var newSpeed = pick switch { "Slow" => CombatSpeed.Slow, "Normal" => CombatSpeed.Normal, "Fast" => CombatSpeed.Fast, "Instant" => CombatSpeed.Instant, _ => CombatSpeed.Normal };
+        _state.SetCombatSpeed(newSpeed);
+        AnsiConsole.MarkupLine($"[green]Combat speed set to[/] [yellow]{newSpeed}[/].");
+        AnsiConsole.MarkupLine("Press any key to continue...");
+        InputWaiter.WaitForAny(_state.InputMode);
     }
 }

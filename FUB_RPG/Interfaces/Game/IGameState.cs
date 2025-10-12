@@ -12,4 +12,10 @@ public interface IGameState
     IMap? CurrentMap { get; }
     IWorld? CurrentWorld { get; }
     int TurnNumber { get; }
+    // Expose combat display speed configuration
+    CombatSpeed CombatSpeed { get; }
+    void SetCombatSpeed(CombatSpeed speed);
+    // New: combat log visibility toggle
+    bool ShowCombatLog { get; }
+    void SetShowCombatLog(bool visible);
 }

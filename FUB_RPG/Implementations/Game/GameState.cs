@@ -19,6 +19,12 @@ public sealed class GameState : IGameState
     // New: Difficulty
     public Difficulty Difficulty { get; private set; } = Difficulty.Normal;
 
+    // New: Combat display speed setting
+    public CombatSpeed CombatSpeed { get; private set; } = CombatSpeed.Normal;
+
+    // New: Combat log visibility toggle
+    public bool ShowCombatLog { get; private set; } = true;
+
     public GameState(IParty party)
     {
         Party = party;
@@ -31,4 +37,6 @@ public sealed class GameState : IGameState
     public void SetInputMode(InputMode mode) => InputMode = mode;
     public void SetControllerType(ControllerType type) => ControllerType = type;
     public void SetDifficulty(Difficulty difficulty) => Difficulty = difficulty;
+    public void SetCombatSpeed(CombatSpeed speed) => CombatSpeed = speed;
+    public void SetShowCombatLog(bool visible) => ShowCombatLog = visible;
 }

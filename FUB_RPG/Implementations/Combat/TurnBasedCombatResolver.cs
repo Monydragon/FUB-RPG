@@ -8,6 +8,7 @@ using Fub.Interfaces.Items.Weapons;
 using Fub.Implementations.Input;
 using Fub.Interfaces.Abilities;
 using Fub.Implementations.Abilities;
+using Fub.Interfaces.Game;
 
 namespace Fub.Implementations.Combat;
 
@@ -15,12 +16,193 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
 {
     private readonly System.Random _rng = new();
     private readonly Dictionary<Guid, bool> _defendingActors = new();
+    private readonly IGameState _state;
+
+    public TurnBasedCombatResolver(IGameState state)
+    {
+        _state = state;
+    }
 
     // Transient UI flash state for hit/heal feedback
     private Guid? _flashEnemyId;
     private int _flashEnemyTicks;
     private Guid? _flashAllyId;
     private int _flashAllyTicks;
+
+    // New: bottom battle message log
+    private readonly List<string> _messageLog = new();
+    private int _logScrollOffset = 0; // 0 means show newest 5; positive values scroll to older
+
+    private void AddMessage(string markup)
+    {
+        _messageLog.Add(markup);
+        // Snap to latest on new message
+        _logScrollOffset = 0;
+    }
+
+    private const int LogWindowSize = 5;
+
+    // Dedicated scroll loop to navigate the bottom log with arrow keys
+    private void ScrollLogLoop(ICombatSession session)
+    {
+        if (_messageLog.Count <= LogWindowSize)
+        {
+            return; // nothing to scroll
+        }
+        while (true)
+        {
+            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
+            var action = InputManager.ReadNextAction(PromptNavigator.DefaultInputMode);
+            if (action == InputAction.MoveUp)
+             {
+                 int maxOffset = Math.Max(0, _messageLog.Count - LogWindowSize);
+                 _logScrollOffset = Math.Min(maxOffset, _logScrollOffset + 1);
+             }
+            else if (action == InputAction.MoveDown)
+             {
+                 _logScrollOffset = Math.Max(0, _logScrollOffset - 1);
+             }
+            else if (action == InputAction.MoveLeft)
+             {
+                 int maxOffset = Math.Max(0, _messageLog.Count - LogWindowSize);
+                 _logScrollOffset = Math.Min(maxOffset, _logScrollOffset + LogWindowSize);
+             }
+            else if (action == InputAction.MoveRight)
+             {
+                 _logScrollOffset = Math.Max(0, _logScrollOffset - LogWindowSize);
+             }
+            else if (action == InputAction.Inventory) // map Home to Inventory for lack of key (quick jump oldest)
+             {
+                 _logScrollOffset = Math.Max(0, _messageLog.Count - LogWindowSize);
+             }
+            else if (action == InputAction.Map) // map End to Map (quick jump newest)
+             {
+                 _logScrollOffset = 0;
+             }
+            else if (action == InputAction.Interact || action == InputAction.Menu || action == InputAction.Log)
+             {
+                 break; // exit scroll mode
+             }
+        }
+    }
+
+    private int GetMessageDisplayMs()
+    {
+        return _state.CombatSpeed switch
+        {
+
+            CombatSpeed.Slow => 6000,
+            CombatSpeed.Normal => 3000,
+            CombatSpeed.Fast => 1000,
+            CombatSpeed.Instant => 100,
+            _ => 3000
+        };
+    }
+
+    private void SleepFixed(int ms)
+    {
+        if (ms > 0) Thread.Sleep(ms);
+    }
+
+    // Non-blocking keyboard scroll while displaying an action message; only consumes scroll keys
+    private void PollKeyboardScrollNonblocking()
+    {
+        while (Console.KeyAvailable)
+        {
+            var keyInfo = Console.ReadKey(true);
+            if (keyInfo.Key == ConsoleKey.UpArrow)
+            {
+                int maxOffset = Math.Max(0, _messageLog.Count - LogWindowSize);
+                _logScrollOffset = Math.Min(maxOffset, _logScrollOffset + 1);
+            }
+            else if (keyInfo.Key == ConsoleKey.DownArrow)
+            {
+                _logScrollOffset = Math.Max(0, _logScrollOffset - 1);
+            }
+            else if (keyInfo.Key == ConsoleKey.PageUp)
+            {
+                int maxOffset = Math.Max(0, _messageLog.Count - LogWindowSize);
+                _logScrollOffset = Math.Min(maxOffset, _logScrollOffset + LogWindowSize);
+            }
+            else if (keyInfo.Key == ConsoleKey.PageDown)
+            {
+                _logScrollOffset = Math.Max(0, _logScrollOffset - LogWindowSize);
+            }
+            else if (keyInfo.Key == ConsoleKey.Home)
+            {
+                _logScrollOffset = Math.Max(0, _messageLog.Count - LogWindowSize);
+            }
+            else if (keyInfo.Key == ConsoleKey.End)
+            {
+                _logScrollOffset = 0;
+            }
+            else
+            {
+                // Put back non-scroll keys by ignoring them (we can't truly un-read, but we only enter here during action display)
+            }
+        }
+    }
+
+    private void ShowMessage(ICombatSession session, string markup)
+    {
+        AddMessage(markup);
+        // Re-render scene with latest message at the bottom
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
+        int total = GetMessageDisplayMs();
+        int elapsed = 0;
+        const int slice = 50;
+        while (elapsed < total)
+        {
+            PollKeyboardScrollNonblocking();
+            Thread.Sleep(slice);
+            elapsed += slice;
+        }
+    }
+
+    // Guarantees at least 3 seconds display per action message regardless of speed
+    private void ShowActionMessage(ICombatSession session, string markup)
+    {
+        AddMessage(markup);
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
+        int total = GetMessageDisplayMs();
+        int elapsed = 0;
+        const int slice = 50;
+        while (elapsed < total)
+        {
+            PollKeyboardScrollNonblocking();
+            Thread.Sleep(slice);
+            elapsed += slice;
+        }
+    }
+
+    private void ShowPrompt(ICombatSession session, string markup)
+    {
+        AddMessage(markup);
+        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
+        InputWaiter.WaitForAny(PromptNavigator.DefaultInputMode);
+    }
+
+    private void ToggleLog()
+    {
+        _state.SetShowCombatLog(!_state.ShowCombatLog);
+    }
+
+    // Helper: scale delays based on combat speed (for animations only)
+    private int ScaleDelay(int baseMs)
+    {
+        return _state.CombatSpeed switch
+        {
+            CombatSpeed.Instant => 0,
+            CombatSpeed.Fast => (int)Math.Round(baseMs * 0.5),
+            CombatSpeed.Slow => (int)Math.Round(baseMs * 1.5),
+            _ => baseMs
+        };
+    }
+    private void Sleep(int baseMs)
+    {
+        int ms = ScaleDelay(baseMs);
+        if (ms > 0) Thread.Sleep(ms);
+    }
 
     // === UI helpers: bar rendering consistent with exploration HUD ===
     private static string Bar(string label, double current, double max, int width, string color)
@@ -42,6 +224,31 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         return Math.Clamp((cw - 10) / 4 - 10, 12, 24);
     }
 
+    private static int ClassDisplayWidth()
+    {
+        int cw = Math.Max(80, Console.WindowWidth);
+        if (cw >= 160) return 30;
+        if (cw >= 140) return 28;
+        if (cw >= 120) return 24;
+        return 20;
+    }
+
+    private static (int nameW,int speciesW,int classW,int lvlW,int actionW) ColumnWidths()
+    {
+        int cw = Math.Max(80, Console.WindowWidth);
+        // Baselines
+        int nameW = 16, speciesW = 12, classW = 18, lvlW = 6, actionW = 18;
+        // Overhead: marker(2) + 2 spaces between 5 columns = 2 + 8 = 10
+        int used = nameW + speciesW + classW + lvlW + actionW + 10;
+        int extra = Math.Max(0, cw - used);
+        // Favor action and class first, then name, then species
+        int addAction = Math.Min(extra, 20); extra -= addAction; actionW += addAction;
+        int addClass = Math.Min(extra, 10); extra -= addClass; classW += addClass;
+        int addName = Math.Min(extra, 8);  extra -= addName;  nameW += addName;
+        int addSpecies = Math.Min(extra, 6); extra -= addSpecies; speciesW += addSpecies;
+        return (nameW, speciesW, classW, lvlW, Math.Max(12, actionW));
+    }
+
     private static string Fit(string s, int width)
     {
         if (s == null) return new string(' ', width);
@@ -56,6 +263,11 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
 
     public ICombatSession BeginCombat(ICombatSession session)
     {
+        // Reset transient visual state and battle log for new encounter
+        _flashEnemyId = null; _flashEnemyTicks = 0; _flashAllyId = null; _flashAllyTicks = 0;
+        _messageLog.Clear();
+        _logScrollOffset = 0;
+
         AnsiConsole.Clear();
         AnsiConsole.Write(new Rule("[bold red]\u2694\ufe0f  COMBAT INITIATED  \u2694\ufe0f[/]").RuleStyle("red"));
         AnsiConsole.WriteLine();
@@ -113,7 +325,9 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             AnsiConsole.Write(new Rule("[yellow]Confirm Planned Actions[/]").RuleStyle("yellow"));
             var confirmChoice = PromptNavigator.PromptChoice<string>(
                 "Proceed with these actions?",
-                new List<string> { "Confirm", "Edit Actor", "Restart Planning" },
+                new List<string> { "Confirm", "Edit Actor", "Restart Planning", _state.ShowCombatLog ? "Hide Log" : "Show Log" }
+                    .Concat(_state.ShowCombatLog && _messageLog.Count > LogWindowSize ? new[]{"Scroll Log (↑/↓)"} : Array.Empty<string>())
+                    .ToList(),
                 PromptNavigator.DefaultInputMode,
                 PromptNavigator.DefaultControllerType,
                 renderBackground: () =>
@@ -143,32 +357,46 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 }
                 continue;
             }
-            // Edit specific actor in-place (open their main action menu now)
-            int editIndex = Math.Max(1, ParseLeadingIndex(
-                PromptNavigator.PromptChoice<string>(
-                    "Edit which actor?",
-                    aliveAllies.Select((a, i) => $"{i+1}. {a.Name}").ToList(),
-                    PromptNavigator.DefaultInputMode,
-                    PromptNavigator.DefaultControllerType,
-                    renderBackground: () =>
-                    {
-                        RenderCombatScene(session, current: null, plannedActions: BuildPlannedDescriptions(plannedByIndex), animationFrame: null);
-                    }
-                ))) - 1;
-            editIndex = Math.Clamp(editIndex, 0, aliveAllies.Count - 1);
-            var actorToEdit = aliveAllies[editIndex];
-            var prev = plannedByIndex[editIndex];
-            var selection = GetPlayerAction(actorToEdit, session, BuildPlannedDescriptions(plannedByIndex), allowBack: true);
-            if (selection.Back)
+            if (confirmChoice == "Edit Actor")
             {
-                // Keep previous selection
-                plannedByIndex[editIndex] = prev;
+                // Edit specific actor in-place (open their main action menu now)
+                int editIndex = Math.Max(1, ParseLeadingIndex(
+                    PromptNavigator.PromptChoice<string>(
+                        "Edit which actor?",
+                        aliveAllies.Select((a, i) => $"{i+1}. {a.Name}").ToList(),
+                        PromptNavigator.DefaultInputMode,
+                        PromptNavigator.DefaultControllerType,
+                        renderBackground: () =>
+                        {
+                            RenderCombatScene(session, current: null, plannedActions: BuildPlannedDescriptions(plannedByIndex), animationFrame: null);
+                        }
+                    ))) - 1;
+                editIndex = Math.Clamp(editIndex, 0, aliveAllies.Count - 1);
+                var actorToEdit = aliveAllies[editIndex];
+                var prev = plannedByIndex[editIndex];
+                var selection = GetPlayerAction(actorToEdit, session, BuildPlannedDescriptions(plannedByIndex), allowBack: true);
+                if (selection.Back)
+                {
+                    // Keep previous selection
+                    plannedByIndex[editIndex] = prev;
+                }
+                else
+                {
+                    plannedByIndex[editIndex] = selection.Action ?? new CombatAction(CombatActionType.Pass, actorToEdit, priority: -100);
+                }
+                // Loop back to confirmation to allow more edits or confirm
             }
-            else
+            if (confirmChoice == "Hide Log" || confirmChoice == "Show Log")
             {
-                plannedByIndex[editIndex] = selection.Action ?? new CombatAction(CombatActionType.Pass, actorToEdit, priority: -100);
+                ToggleLog();
+                // Loop to re-render with updated visibility
+                continue;
             }
-            // Loop back to confirmation to allow more edits or confirm
+            if (confirmChoice == "Scroll Log (↑/↓)")
+            {
+                ScrollLogLoop(session);
+                continue;
+            }
         }
 
         // Collect planned and enemy actions
@@ -200,12 +428,12 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             ExecuteAction(action, session);
             // Re-render after each action so numbers/bars update live
             RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
-            Thread.Sleep(300);
+            Sleep(300);
         }
 
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[grey]Press any key to continue...[/]");
-        InputWaiter.WaitForAny(PromptNavigator.DefaultInputMode);
+        // Move the continue prompt to the bottom message area
+        ShowPrompt(session, "[grey]Press any key to continue...[/]");
 
         // Regenerate small MP/TP per turn for all alive combatants
         RegenerateResources(session.Allies.Where(a => a.GetStat(StatType.Health).Current > 0), mpPct: 0.03, tpPct: 0.04);
@@ -225,22 +453,40 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         else if (session.Outcome == CombatOutcome.Defeat)
         {
             AnsiConsole.Write(new Rule("[bold red]\ud83d\udc80 DEFEAT \ud83d\udc80[/]").RuleStyle("red"));
-            AnsiConsole.MarkupLine("\n[red]Your party has been defeated...[/]");
+            // Also add to bottom log
+            AddMessage("[red]Your party has been defeated...[/]");
         }
         // No input wait here; caller will handle next UI (e.g., Results screen)
     }
 
-    // Render full scene: Enemies on top, Battle animation (optional) in the middle, Party at the bottom
+    // Render full scene: Enemies on top, Battle animation (optional) in the middle, Party at the bottom, Message log at very bottom
     private void RenderCombatScene(ICombatSession session, IActor? current, List<string>? plannedActions, string? animationFrame)
     {
         // Always clear to keep layers in the right order
         AnsiConsole.Clear();
 
+        // Create quick lookup for planned actions per ally name
+        Dictionary<string, string>? plannedByName = null;
+        if (plannedActions != null)
+        {
+            plannedByName = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var p in plannedActions)
+            {
+                var idx = p.IndexOf(':');
+                if (idx > 0)
+                {
+                    var who = p.Substring(0, idx).Trim();
+                    var act = p.Substring(idx + 1).Trim();
+                    plannedByName[who] = act;
+                }
+            }
+        }
+
         // Top: Enemies panel
         var enemiesPanel = BuildEnemiesPanel(session);
         AnsiConsole.Write(enemiesPanel);
 
-        // Middle: Battle display / planned actions
+        // Middle: optional animation area; if none, don't add spacer to keep layout tight
         if (!string.IsNullOrEmpty(animationFrame))
         {
             var animPanel = new Panel(new Markup(animationFrame))
@@ -251,53 +497,44 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             };
             AnsiConsole.Write(animPanel);
         }
-        else if (plannedActions != null && plannedActions.Count > 0)
-        {
-            var planPanel = new Panel(string.Join(Environment.NewLine, plannedActions))
-                .Header("[bold yellow]Planned Actions[/]").BorderColor(Color.Yellow);
-            AnsiConsole.Write(planPanel);
-        }
-        else
-        {
-            // Empty spacer to visually separate
-            AnsiConsole.Write(new Panel(" ") { Border = BoxBorder.None });
-        }
 
-        // Bottom: Allies panel (with optional current marker)
-        var alliesPanel = BuildAlliesPanel(session, current);
+        // Party panel with inline actions
+        var alliesPanel = BuildAlliesPanel(session, current, plannedByName);
         AnsiConsole.Write(alliesPanel);
+
+        // Messages panel (very bottom)
+        if (_state.ShowCombatLog)
+        {
+            var msgPanel = BuildMessagesPanel();
+            AnsiConsole.Write(msgPanel);
+        }
     }
 
-    // Previous helpers now delegate to the unified scene
-    private void RenderCombatStatus(ICombatSession session, IActor? current, List<string>? plannedActions)
-    {
-        RenderCombatScene(session, current, plannedActions, animationFrame: null);
-    }
-
-    private void RenderCombatStatusWithMap(ICombatSession session, IActor? current, Dictionary<Guid, string>? plannedMap)
-    {
-        // Rebuild a readable planned list from map
-        List<string>? planned = null;
-        if (plannedMap != null)
-            planned = session.Allies.Select(a => plannedMap.ContainsKey(a.Id) ? plannedMap[a.Id] : $"{a.Name}: -").ToList();
-        RenderCombatScene(session, current, planned, animationFrame: null);
-    }
-
-    private Panel BuildAlliesPanel(ICombatSession session, IActor? current)
+    private Panel BuildAlliesPanel(ICombatSession session, IActor? current, Dictionary<string,string>? plannedByName)
     {
         int w = BarWidth();
+        var widths = ColumnWidths();
         var alliesSb = new System.Text.StringBuilder();
         foreach (var a in session.Allies)
         {
             bool isCurrent = current != null && a.Id == current.Id;
             bool isFlashing = _flashAllyId.HasValue && _flashAllyId.Value == a.Id && _flashAllyTicks > 0;
-            string marker = isCurrent ? "[cyan]>[/] " : "   ";
+            string marker = isCurrent ? "[cyan]>[/] " : "  ";
             var jl = a.JobSystem.GetJobLevel(a.EffectiveClass);
             long toNext = Math.Max(0, jl.ExperienceToNextLevel - jl.Experience);
-            string nameLine = isFlashing
-                ? $"{marker}[bold green]{a.Name}[/]  [cyan]{Fit(a.EffectiveClass.ToString(),20)}[/]  {LevelTag(jl.Level)} [green]\u2665 HEAL[/]"
-                : $"{marker}[white]{a.Name}[/]  [cyan]{Fit(a.EffectiveClass.ToString(),20)}[/]  {LevelTag(jl.Level)}";
-            alliesSb.AppendLine(nameLine);
+
+            string name = Fit(a.Name, widths.nameW);
+            string species = Fit(a.Species.ToString(), widths.speciesW);
+            string cls = Fit(a.EffectiveClass.ToString(), widths.classW);
+            string lvl = Fit($"Lv {jl.Level}", widths.lvlW);
+            string actionText = plannedByName != null && plannedByName.TryGetValue(a.Name, out var act) ? act : "-";
+            string action = Fit(actionText, widths.actionW);
+
+            string line1 = isFlashing
+                ? $"{marker}[bold white]{name}[/]  [green]{species}[/]  [cyan]{cls}[/]  [yellow]{lvl}[/]  [grey]Action:[/] [white]{action}[/]"
+                : $"{marker}[white]{name}[/]  [green]{species}[/]  [cyan]{cls}[/]  [yellow]{lvl}[/]  [grey]Action:[/] [white]{action}[/]";
+            alliesSb.AppendLine(line1);
+
             var hp = a.GetStat(StatType.Health); var mp = a.GetStat(StatType.Mana); var tp = a.GetStat(StatType.Technical);
             alliesSb.AppendLine($"{Bar("HP", hp.Current, hp.Modified, w, "red1")}  {Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1")}  {Bar("TP", tp.Current, tp.Modified, w, "orchid")}  {Bar("EXP", jl.Experience, Math.Max(1, jl.ExperienceToNextLevel), w, "yellow3")}  [grey]ToNext:[/] [white]{toNext}[/]");
         }
@@ -308,20 +545,55 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
     private Panel BuildEnemiesPanel(ICombatSession session)
     {
         int w = BarWidth();
+        var widths = ColumnWidths();
         var enemiesSb = new System.Text.StringBuilder();
         foreach (var e in session.Enemies)
         {
             bool isFlashing = _flashEnemyId.HasValue && _flashEnemyId.Value == e.Id && _flashEnemyTicks > 0;
-            string nameLine = isFlashing
-                ? $"   [bold red]{e.Name}[/]  [cyan]{Fit(e.EffectiveClass.ToString(),20)}[/]  {LevelTag(e.Level)}  [yellow]\ud83d\udca5 HIT![/]"
-                : $"   [white]{e.Name}[/]  [cyan]{Fit(e.EffectiveClass.ToString(),20)}[/]  {LevelTag(e.Level)}";
-            enemiesSb.AppendLine(nameLine);
+            string name = Fit(e.Name, widths.nameW);
+            string species = Fit(e.Species.ToString(), widths.speciesW);
+            string cls = Fit(e.EffectiveClass.ToString(), widths.classW);
+            string lvl = Fit($"Lv {e.Level}", widths.lvlW);
+            string line1 = isFlashing
+                ? $"  [bold white]{name}[/]  [green]{species}[/]  [cyan]{cls}[/]  [yellow]{lvl}[/]"
+                : $"  [white]{name}[/]  [green]{species}[/]  [cyan]{cls}[/]  [yellow]{lvl}[/]";
+            enemiesSb.AppendLine(line1);
             var hp = e.GetStat(StatType.Health); var mp = e.GetStat(StatType.Mana); var tp = e.GetStat(StatType.Technical);
             string hpColor = isFlashing ? "yellow1" : "red1";
             enemiesSb.AppendLine($"{Bar("HP", hp.Current, hp.Modified, w, hpColor)}  {Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1")}  {Bar("TP", tp.Current, tp.Modified, w, "orchid")} ");
         }
         var borderColor = (_flashEnemyTicks > 0 && (_flashEnemyTicks % 2 == 0)) ? Color.Yellow : Color.Red;
         return new Panel(new Markup(enemiesSb.ToString())) { Header = new PanelHeader(" Enemies ", Justify.Center), Border = BoxBorder.Rounded, BorderStyle = new Style(borderColor) };
+    }
+
+    private Panel BuildMessagesPanel()
+    {
+        // Determine the 5-line window based on current scroll offset
+        var total = _messageLog.Count;
+        var sb = new System.Text.StringBuilder();
+        if (total == 0)
+        {
+            sb.AppendLine("[grey]No battle messages yet.[/]");
+        }
+        else
+        {
+            int window = LogWindowSize;
+            int maxOffset = Math.Max(0, total - window);
+            int offset = Math.Clamp(_logScrollOffset, 0, maxOffset);
+            int start = Math.Max(0, total - window - offset);
+            int end = Math.Min(total, start + window);
+            for (int i = start; i < end; i++)
+            {
+                sb.AppendLine(_messageLog[i]);
+            }
+        }
+        var headerText = _messageLog.Count <= LogWindowSize ? " Messages " : $" Messages  [grey](↑/↓ scroll) [/]{(_messageLog.Count - _logScrollOffset)}/{_messageLog.Count} ";
+        return new Panel(new Markup(sb.ToString()))
+        {
+            Header = new PanelHeader(headerText, Justify.Center),
+            Border = BoxBorder.Rounded,
+            BorderStyle = new Style(Color.Grey)
+        };
     }
 
     private void WriteCurrentActorPanel(IActor actor)
@@ -333,7 +605,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         var mp = actor.GetStat(StatType.Mana);
         var tp = actor.GetStat(StatType.Technical);
 
-        var header = $"[bold cyan]{actor.Name}[/]'s Turn  [grey]Class[/]: [cyan]{Fit(actor.EffectiveClass.ToString(),20)}[/]  [grey]Species[/]: {actor.Species}  {LevelTag(jl.Level)}";
+        var header = $"[bold cyan]{actor.Name}[/]'s Turn  [grey]Class[/]: [cyan]{Fit(actor.EffectiveClass.ToString(),ClassDisplayWidth())}[/]  [grey]Species[/]: {actor.Species}  {LevelTag(jl.Level)}";
 
         var topGrid = new Grid();
         topGrid.AddColumn(new GridColumn().NoWrap());
@@ -391,7 +663,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             enemiesTable.AddRow(
                 (i+1).ToString(),
                 e.Name,
-                Fit(e.EffectiveClass.ToString(), 20),
+                Fit(e.EffectiveClass.ToString(), ClassDisplayWidth()),
                 $"{e.Level}",
                 Bar("HP", hp.Current, hp.Modified, w, "red1"),
                 Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1"),
@@ -435,7 +707,11 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             var choices = new List<string> { "\u2694\ufe0f Attack", "\ud83d\udee1\ufe0f Defend", "\ud83c\udfc3 Pass" };
             if (actor is IHasAbilityBook hasBook && hasBook.AbilityBook.KnownAbilities.Count > 0)
                 choices.Insert(1, "\u2728 Use Ability");
-            if (allowBack) choices.Add("Back");
+            // Add toggle and scroll options for log visibility
+            choices.Add(_state.ShowCombatLog ? "Hide Log" : "Show Log");
+            if (_state.ShowCombatLog && _messageLog.Count > LogWindowSize)
+                choices.Add("Scroll Log (↑/↓)");
+             if (allowBack) choices.Add("Back");
 
             var choice = PromptNavigator.PromptChoice<string>(
                 "Select action:",
@@ -447,6 +723,20 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                     RenderCombatScene(session, current: actor, plannedActions: plannedActions, animationFrame: null);
                     WriteCurrentActorPanel(actor);
                 });
+
+            if (choice == "Hide Log" || choice == "Show Log")
+            {
+                ToggleLog();
+                // Re-render and continue selection
+                RenderCombatScene(session, current: actor, plannedActions: plannedActions, animationFrame: null);
+                continue;
+            }
+            if (choice == "Scroll Log (↑/↓)")
+            {
+                ScrollLogLoop(session);
+                RenderCombatScene(session, current: actor, plannedActions: plannedActions, animationFrame: null);
+                continue;
+            }
 
             if (allowBack && IsBackSelection(choice))
             {
@@ -481,7 +771,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 bool canAffordSel = ability.CostType switch { AbilityCostType.Mana => actor.GetStat(StatType.Mana).Current >= selCost, AbilityCostType.Technical => actor.GetStat(StatType.Technical).Current >= selCost, AbilityCostType.Health => actor.GetStat(StatType.Health).Current > selCost, _ => true };
                 if (!canAffordSel)
                 {
-                    AnsiConsole.MarkupLine($"[red]Not enough resources to use {ability.Name}. Choose a different action.[/]");
+                    ShowMessage(session, $"[red]Not enough resources to use {ability.Name}. Choose a different action.[/]");
                     continue;
                 }
                 // Determine targets per ability target type
@@ -580,13 +870,13 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 ExecuteAttack(action, session);
                 break;
             case CombatActionType.Defend:
-                ExecuteDefend(action);
+                ExecuteDefend(action, session);
                 break;
             case CombatActionType.UseAbility:
                 ExecuteAbility(action, session);
                 break;
             case CombatActionType.Pass:
-                AnsiConsole.MarkupLine($"[grey]{action.Actor.Name} passes their turn.[/]");
+                ShowActionMessage(session, $"[grey]{action.Actor.Name} passes their turn.[/]");
                 break;
         }
     }
@@ -594,7 +884,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
     private void ExecuteAbility(ICombatAction action, ICombatSession session)
     {
         var ability = (action as CombatAction)?.CustomData as IAbility;
-        if (ability == null) { AnsiConsole.MarkupLine("[grey]But nothing happened...[/]"); return; }
+        if (ability == null) { ShowActionMessage(session, "[grey]But nothing happened...[/]"); return; }
         var user = action.Actor;
         // Cost
         double cost = (ability as AbilityBase)?.CostAmount ?? 0;
@@ -605,7 +895,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             paid = (user as ActorBase)?.TrySpend(StatType.Technical, cost) ?? false;
         else if (ability.CostType == AbilityCostType.Health)
             paid = (user as ActorBase)?.TrySpend(StatType.Health, cost) ?? false;
-        if (!paid) { AnsiConsole.MarkupLine($"[red]{user.Name} lacks resources to use {ability.Name}![/]"); return; }
+        if (!paid) { ShowActionMessage(session, $"[red]{user.Name} lacks resources to use {ability.Name}![/]"); return; }
 
         // Simple effect logic: damage or heal based on category
         var targets = action.Target != null ? new List<IActor> { action.Target } : new List<IActor> { user };
@@ -624,8 +914,8 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 var color = session.Allies.Contains(t) ? "green" : "red";
                 // Simple sparkle animation for abilities
                 ShowAbilityAnimation(session, user, t, baseAmount);
-                AnsiConsole.MarkupLine($"[cyan]{user.Name}[/] uses [yellow]{ability.Name}[/] on [{color}]{t.Name}[/] for [yellow]{baseAmount:F0}[/] damage!");
-                if (remain <= 0) AnsiConsole.MarkupLine($"[bold red]\ud83d\udc80 {t.Name} is defeated!\ud83d\udc80[/]");
+                ShowActionMessage(session, $"[cyan]{user.Name}[/] uses [yellow]{ability.Name}[/] on [{color}]{t.Name}[/] for [yellow]{baseAmount:F0}[/] damage!");
+                if (remain <= 0) ShowActionMessage(session, $"[bold red]\ud83d\udc80 {t.Name} is defeated!\ud83d\udc80[/]");
             }
         }
         else // treat as heal/support
@@ -636,7 +926,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 int amount = (int)(10 + 0.4 * scale);
                 (t as ActorBase)?.Heal(amount);
                 ShowHealAnimation(session, user, t, amount);
-                AnsiConsole.MarkupLine($"[cyan]{user.Name}[/] uses [yellow]{ability.Name}[/] to heal [green]{t.Name}[/] for [green]{amount}[/] HP!");
+                ShowActionMessage(session, $"[cyan]{user.Name}[/] uses [yellow]{ability.Name}[/] to heal [green]{t.Name}[/] for [green]{amount}[/] HP!");
             }
         }
     }
@@ -651,7 +941,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         // Skip if defender already downed by an earlier action this turn
         if (defender.GetStat(StatType.Health).Current <= 0)
         {
-            AnsiConsole.MarkupLine($"[grey]{attacker.Name} tries to attack {defender.Name}, but the target is already down.[/]");
+            ShowMessage(session, $"[grey]{attacker.Name} tries to attack {defender.Name}, but the target is already down.[/]");
             return;
         }
         
@@ -679,7 +969,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         if (_defendingActors.ContainsKey(defender.Id))
         {
             finalDamage *= 0.5;
-            AnsiConsole.MarkupLine($"[cyan]{defender.Name} is defending![/]");
+            ShowActionMessage(session, $"[cyan]{defender.Name} is defending![/]");
         }
         
         // Critical based on CritChance/CritDamage stats
@@ -692,30 +982,31 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             finalDamage *= critMult;
         }
         
-        // Show a simple left-right arrow animation before applying damage
-        ShowAttackAnimation(session, attacker, defender, isCrit, finalDamage);
-        
-        var packet = new DamagePacket(attacker.Id, new[] { new DamageComponent(DamageType.Physical, finalDamage) }, isCritical: isCrit);
-        var remaining = defender.TakeDamage(packet);
-        
+        // Build a single-line message, embedding CRITICAL and larger-styled number
+        string dmgText = isCrit
+            ? $"[bold yellow]{finalDamage:F0}![/]"
+            : $"[yellow]{finalDamage:F0}[/]";
+        string critTag = isCrit ? " [bold yellow]CRITICAL![/]" : string.Empty;
         var attackerColor = session.Allies.Contains(attacker) ? "green" : "red";
         var defenderColor = session.Allies.Contains(defender) ? "green" : "red";
         
-        if (isCrit)
-            AnsiConsole.MarkupLine("[bold yellow]\ud83d\udca5 CRITICAL HIT! \ud83d\udca5[/]");
+        ShowActionMessage(session, $"[{attackerColor}]{attacker.Name}[/] attacks [{defenderColor}]{defender.Name}[/] for {dmgText} damage!{critTag}");
+ 
+        var packet = new DamagePacket(attacker.Id, new[] { new DamageComponent(DamageType.Physical, finalDamage) }, isCritical: isCrit);
+        var remaining = defender.TakeDamage(packet);
+        
 
-        AnsiConsole.MarkupLine($"[{attackerColor}]{attacker.Name}[/] attacks [{defenderColor}]{defender.Name}[/] for [yellow]{finalDamage:F0}[/] damage!");
         
         if (remaining <= 0)
         {
-            AnsiConsole.MarkupLine($"[bold red]\ud83d\udc80 {defender.Name} has been defeated! \ud83d\udc80[/]");
+            ShowActionMessage(session, $"[bold red]\ud83d\udc80 {defender.Name} has been defeated! \ud83d\udc80[/]");
         }
     }
 
-    private void ExecuteDefend(ICombatAction action)
+    private void ExecuteDefend(ICombatAction action, ICombatSession session)
     {
         _defendingActors[action.Actor.Id] = true;
-        AnsiConsole.MarkupLine($"[cyan]{action.Actor.Name} takes a defensive stance![/]");
+        ShowActionMessage(session, $"[cyan]{action.Actor.Name} takes a defensive stance![/]");
     }
 
     private long CalculateExperienceReward(int enemyLevel)
@@ -760,91 +1051,47 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
     // === Animations ===
     private void ShowAttackAnimation(ICombatSession session, IActor attacker, IActor defender, bool isCrit, double dmg)
     {
-        bool attackerIsAlly = session.Allies.Any(a => a.Id == attacker.Id);
+        // Flash-only: briefly flash the defender; no center icons or text frames
         bool defenderIsEnemy = session.Enemies.Any(e => e.Id == defender.Id);
-        var attackerColor = attackerIsAlly ? "green" : "red";
-        var defenderColor = attackerIsAlly ? "red" : "green";
-
-        // 1) Preparation
-        string prep = $"[bold {attackerColor}]{attacker.Name}[/] gathers themselves...";
-        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: prep);
-        Thread.Sleep(350);
-
-        // 2) Strike and set flash on the correct panel for defender
-        string strike = $"[bold]{attacker.Name}[/] [yellow]\u27A1\ufe0f[/] [{defenderColor}]{defender.Name}[/] for [yellow]{dmg:F0}[/] damage!";
         if (defenderIsEnemy) { _flashEnemyId = defender.Id; _flashEnemyTicks = isCrit ? 6 : 4; }
         else { _flashAllyId = defender.Id; _flashAllyTicks = isCrit ? 6 : 4; }
         int loops = isCrit ? 6 : 4;
         for (int i = 0; i < loops; i++)
         {
-            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: strike);
-            Thread.Sleep(isCrit ? 140 : 110);
+            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
+            Sleep(isCrit ? 120 : 90);
             if (defenderIsEnemy) _flashEnemyTicks = Math.Max(0, _flashEnemyTicks - 1); else _flashAllyTicks = Math.Max(0, _flashAllyTicks - 1);
         }
-
-        // 3) Impact emphasis
-        string impact = isCrit ? "[bold yellow]\ud83d\udca5 CRITICAL STRIKE! \ud83d\udca5[/]" : "[yellow]\ud83d\udca5 IMPACT! \ud83d\udca5[/]";
-        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: impact);
-        Thread.Sleep(isCrit ? 520 : 380);
-
-        // 4) Aftermath snapshot so bars update nicely
-        string aftermath = $"[{attackerColor}]{attacker.Name}[/] -> [{defenderColor}]{defender.Name}[/]  [yellow]{dmg:F0}[/]";
-        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: aftermath);
-        Thread.Sleep(240);
-
-        // Clear flash state
         if (defenderIsEnemy) { _flashEnemyId = null; _flashEnemyTicks = 0; } else { _flashAllyId = null; _flashAllyTicks = 0; }
     }
 
     private void ShowAbilityAnimation(ICombatSession session, IActor user, IActor target, double amount)
     {
-        bool userIsAlly = session.Allies.Any(a => a.Id == user.Id);
-        var userColor = userIsAlly ? "green" : "red";
-        var targetColor = userIsAlly ? "red" : "green";
-
-        string cast = "[yellow]\u2728[/] [cyan]" + user.Name + "[/] channels power...";
-        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: cast);
-        Thread.Sleep(340);
-
-        // Effect frame + brief flash on target if damaging
-        string effect = $"[cyan]{user.Name}[/] unleashes power at [{targetColor}]{target.Name}[/]!";
-        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: effect);
-        Thread.Sleep(280);
-
-        // If the target is an enemy from allies' ability, flash enemy panel; else flash allies panel
-        if (userIsAlly && session.Enemies.Any(e => e.Id == target.Id)) { _flashEnemyId = target.Id; _flashEnemyTicks = 4; }
-        else if (!userIsAlly && session.Allies.Any(a => a.Id == target.Id)) { _flashAllyId = target.Id; _flashAllyTicks = 4; }
-
-        string resolve = $"[yellow]\u2728[/] [{targetColor}]{target.Name}[/] affected for [yellow]{amount:F0}[/]!";
-        for (int i = 0; i < 4; i++)
+        // Flash-only: set flash flags and render a few quick frames; no center icons
+        bool targetIsEnemy = session.Enemies.Any(e => e.Id == target.Id);
+        if (targetIsEnemy) { _flashEnemyId = target.Id; _flashEnemyTicks = 4; }
+        else { _flashAllyId = target.Id; _flashAllyTicks = 4; }
+        int loops = 4;
+        for (int i = 0; i < loops; i++)
         {
-            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: resolve);
-            Thread.Sleep(120);
-            if (_flashEnemyTicks > 0) _flashEnemyTicks--; if (_flashAllyTicks > 0) _flashAllyTicks--;
+            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
+            Sleep(100);
+            if (targetIsEnemy) _flashEnemyTicks = Math.Max(0, _flashEnemyTicks - 1);
+            else _flashAllyTicks = Math.Max(0, _flashAllyTicks - 1);
         }
         _flashEnemyId = null; _flashEnemyTicks = 0; _flashAllyId = null; _flashAllyTicks = 0;
     }
 
     private void ShowHealAnimation(ICombatSession session, IActor user, IActor target, int amount)
     {
-        // Pleasant heal sequence with green pulse on allies panel
-        string prepare = $"[green]\u2665[/] [cyan]{user.Name}[/] begins to heal...";
-        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: prepare);
-        Thread.Sleep(320);
-
+        // Flash-only: highlight the healed ally briefly; no center icons
         _flashAllyId = target.Id; _flashAllyTicks = 4;
-        string healLine = $"[cyan]{user.Name}[/] heals [green]{target.Name}[/] for [green]{amount}[/] HP!";
         for (int i = 0; i < 4; i++)
         {
-            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: healLine);
-            Thread.Sleep(140);
+            RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
+            Sleep(100);
             _flashAllyTicks = Math.Max(0, _flashAllyTicks - 1);
         }
-
-        string glow = $"[green]\u2665\u2665\u2665[/] [{target.Name}] feels renewed";
-        RenderCombatScene(session, current: null, plannedActions: null, animationFrame: glow);
-        Thread.Sleep(300);
-
         _flashAllyId = null; _flashAllyTicks = 0;
     }
 
