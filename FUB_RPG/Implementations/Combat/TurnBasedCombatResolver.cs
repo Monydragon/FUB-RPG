@@ -91,11 +91,11 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         return _state.CombatSpeed switch
         {
 
-            CombatSpeed.Slow => 6000,
-            CombatSpeed.Normal => 3000,
-            CombatSpeed.Fast => 1000,
+            CombatSpeed.Slow => 3000,
+            CombatSpeed.Normal => 1000,
+            CombatSpeed.Fast => 500,
             CombatSpeed.Instant => 100,
-            _ => 3000
+            _ => 1000
         };
     }
 
