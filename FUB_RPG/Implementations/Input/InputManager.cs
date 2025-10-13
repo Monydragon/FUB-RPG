@@ -264,13 +264,13 @@ public static class InputManager
                     _didInitialRepeat = false;
                 }
 
-                // Edge-detect confirm/cancel/etc.
-                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.A)) return InputAction.Interact;
-                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.B)) return InputAction.Menu;   // treat as cancel
-                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.X)) return InputAction.Inventory;
-                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.Y)) return InputAction.Party;
-                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.LeftShoulder)) return InputAction.Help;
-                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.RightShoulder)) return InputAction.Log;
+                // Edge-detect confirm/cancel/etc. Ensure we update _prevButtons BEFORE returning
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.A)) { _prevButtons = buttons; return InputAction.Interact; }
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.B)) { _prevButtons = buttons; return InputAction.Menu; }   // treat as cancel
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.X)) { _prevButtons = buttons; return InputAction.Inventory; }
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.Y)) { _prevButtons = buttons; return InputAction.Party; }
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.LeftShoulder)) { _prevButtons = buttons; return InputAction.Help; }
+                if (Edge(buttons, XINPUT_GAMEPAD_BUTTONS.RightShoulder)) { _prevButtons = buttons; return InputAction.Log; }
 
                 _prevButtons = buttons;
             }

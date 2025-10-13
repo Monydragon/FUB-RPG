@@ -122,6 +122,8 @@ class Program
                 }
                 options.Add("Remove Member");
                 if (members.Count > 1) options.Add("Set Leader");
+                // Always allow finishing once we have at least one member
+                if (!options.Contains("Finish")) options.Add("Finish");
             }
 
             var choice = PromptNavigator.PromptChoice(
@@ -191,7 +193,29 @@ class Program
 
     private static PlayerActor CreateActor(string defaultLabel, InputMode mode, ControllerType controllerType)
     {
-        var name = AnsiConsole.Ask<string>($"Enter name for {defaultLabel}:", defaultLabel);
+        string name;
+        if (mode == InputMode.Controller)
+        {
+            // Controller-friendly name selection
+            var pick = PromptNavigator.PromptChoice(
+                $"Name for {defaultLabel}:",
+                new List<string> { $"Use Suggested ({defaultLabel})", "Randomize Name" },
+                mode,
+                controllerType);
+
+            if (pick.StartsWith("Use Suggested"))
+            {
+                name = defaultLabel;
+            }
+            else
+            {
+                name = GenerateRandomName(new System.Random());
+            }
+        }
+        else
+        {
+            name = AnsiConsole.Ask<string>($"Enter name for {defaultLabel}:", defaultLabel);
+        }
 
         var species = PromptNavigator.PromptChoice(
             $"Select [yellow]species[/] for {name}:",

@@ -598,7 +598,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
 
     private void WriteCurrentActorPanel(IActor actor)
     {
-        // Compact header + resource bars, followed by key stats
+        // Compact header + resource bars, followed by a small two-row stats table
         int w = BarWidth();
         var jl = actor.JobSystem.GetJobLevel(actor.EffectiveClass);
         var hp = actor.GetStat(StatType.Health);
@@ -619,58 +619,54 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             new Markup(Bar("EXP", jl.Experience, Math.Max(1, jl.ExperienceToNextLevel), w, "yellow3"))
         );
 
-        var infoTable = new Table().Border(TableBorder.None);
-        infoTable.ShowHeaders = false;
-        infoTable.AddColumn(""); infoTable.AddColumn(""); infoTable.AddColumn("");
-        // Row 1: STR VIT AGI
-        infoTable.AddRow(
-            $"STR {actor.GetStat(StatType.Strength).Modified:F0}",
-            $"VIT {actor.GetStat(StatType.Vitality).Modified:F0}",
-            $"AGI {actor.GetStat(StatType.Agility).Modified:F0}");
-        // Row 2: INT SPR LCK
-        infoTable.AddRow(
-            $"INT {actor.GetStat(StatType.Intellect).Modified:F0}",
-            $"SPR {actor.GetStat(StatType.Spirit).Modified:F0}",
-            $"LCK {actor.GetStat(StatType.Luck).Modified:F0}");
-        // Row 3: Armor Eva Crit%
-        infoTable.AddRow(
-            $"Armor {actor.GetStat(StatType.Armor).Modified:F0}",
-            $"Eva {actor.GetStat(StatType.Evasion).Modified:F0}",
-            $"Crit% {actor.GetStat(StatType.CritChance).Modified:F0}");
-        // Row 4: CritDmg AtkPwr SpPwr
-        infoTable.AddRow(
-            $"CritDmg {actor.GetStat(StatType.CritDamage).Modified:F0}",
-            $"AtkPwr {actor.GetStat(StatType.AttackPower).Modified:F0}",
-            $"SpPwr {actor.GetStat(StatType.SpellPower).Modified:F0}");
-        infoTable.AddRow($"Speed {actor.GetStat(StatType.Speed).Modified:F0}", "", "");
+        // Build compact stats table (two rows) to keep panel small
+        var info = new Table().Border(TableBorder.None);
+        info.ShowHeaders = false;
+        // 7 columns for concise tokens
+        for (int i = 0; i < 7; i++) info.AddColumn("");
 
-        var panel = new Panel(new Rows(new IRenderable[] { new Markup(header), topGrid, infoTable }))
+        string P(string lbl, double val, bool percent = false) => $"[grey]{lbl}[/] [bold white]{(percent ? val.ToString("0") + "%" : val.ToString("0"))}[/]";
+        // Primary stats row (7 tokens)
+        info.AddRow(
+            P("STR", actor.GetStat(StatType.Strength).Modified),
+            P("VIT", actor.GetStat(StatType.Vitality).Modified),
+            P("AGI", actor.GetStat(StatType.Agility).Modified),
+            P("INT", actor.GetStat(StatType.Intellect).Modified),
+            P("SPR", actor.GetStat(StatType.Spirit).Modified),
+            P("LCK", actor.GetStat(StatType.Luck).Modified),
+            P("SPD", actor.GetStat(StatType.Speed).Modified)
+        );
+
+        // Defense/Offense + compressed resistances row
+        var armor = actor.GetStat(StatType.Armor).Modified;
+        var eva = actor.GetStat(StatType.Evasion).Modified;
+        var crit = actor.GetStat(StatType.CritChance).Modified;
+        var cdmg = actor.GetStat(StatType.CritDamage).Modified;
+        var atk = actor.GetStat(StatType.AttackPower).Modified;
+        var spw = actor.GetStat(StatType.SpellPower).Modified;
+        int rF = (int)Math.Round(actor.GetStat(StatType.FireResist).Modified);
+        int rC = (int)Math.Round(actor.GetStat(StatType.ColdResist).Modified);
+        int rL = (int)Math.Round(actor.GetStat(StatType.LightningResist).Modified);
+        int rP = (int)Math.Round(actor.GetStat(StatType.PoisonResist).Modified);
+        int rA = (int)Math.Round(actor.GetStat(StatType.ArcaneResist).Modified);
+        int rS = (int)Math.Round(actor.GetStat(StatType.ShadowResist).Modified);
+        int rH = (int)Math.Round(actor.GetStat(StatType.HolyResist).Modified);
+        string res = $"[grey]Res[/] [bold white]F{rF}% C{rC}% L{rL}% P{rP}% A{rA}% S{rS}% H{rH}%[/]";
+        info.AddRow(
+            P("Armor", armor),
+            P("Eva", eva, percent: true),
+            P("Crit", crit, percent: true),
+            P("CritDmg", cdmg, percent: true),
+            P("AtkPwr", atk),
+            P("SpPwr", spw),
+            res
+        );
+
+        var panel = new Panel(new Rows(new IRenderable[] { new Markup(header), topGrid, info }))
             .Header("[bold cyan]Current Actor[/]")
             .BorderColor(Color.Cyan1)
             .Padding(1, 0);
         AnsiConsole.Write(panel);
-    }
-
-    private void WriteEnemiesTable(IReadOnlyList<IActor> enemies)
-    {
-        int w = Math.Clamp(BarWidth(), 12, 18);
-        var enemiesTable = new Table().Border(TableBorder.Rounded).Title("[bold red]Select Target[/]");
-        enemiesTable.AddColumn("#"); enemiesTable.AddColumn("Name"); enemiesTable.AddColumn("Class"); enemiesTable.AddColumn("Lv"); enemiesTable.AddColumn("HP"); enemiesTable.AddColumn("MP"); enemiesTable.AddColumn("TP");
-        for (int i = 0; i < enemies.Count; i++)
-        {
-            var e = enemies[i];
-            var hp = e.GetStat(StatType.Health); var mp = e.GetStat(StatType.Mana); var tp = e.GetStat(StatType.Technical);
-            enemiesTable.AddRow(
-                (i+1).ToString(),
-                e.Name,
-                Fit(e.EffectiveClass.ToString(), ClassDisplayWidth()),
-                $"{e.Level}",
-                Bar("HP", hp.Current, hp.Modified, w, "red1"),
-                Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1"),
-                Bar("TP", tp.Current, tp.Modified, w, "orchid")
-            );
-        }
-        AnsiConsole.Write(enemiesTable);
     }
 
     private static int ParseLeadingIndex(string label)
@@ -1113,5 +1109,35 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 sv.ApplyDelta(delta);
             }
         }
+    }
+
+    private void WriteEnemiesTable(IReadOnlyList<IActor> enemies)
+    {
+        int w = Math.Clamp(BarWidth(), 12, 18);
+        var enemiesTable = new Table().Border(TableBorder.Rounded).Title("[bold red]Select Target[/]");
+        enemiesTable.AddColumn("#");
+        enemiesTable.AddColumn("Name");
+        enemiesTable.AddColumn("Class");
+        enemiesTable.AddColumn("Lv");
+        enemiesTable.AddColumn("HP");
+        enemiesTable.AddColumn("MP");
+        enemiesTable.AddColumn("TP");
+        for (int i = 0; i < enemies.Count; i++)
+        {
+            var e = enemies[i];
+            var hp = e.GetStat(StatType.Health);
+            var mp = e.GetStat(StatType.Mana);
+            var tp = e.GetStat(StatType.Technical);
+            enemiesTable.AddRow(
+                (i + 1).ToString(),
+                e.Name,
+                Fit(e.EffectiveClass.ToString(), ClassDisplayWidth()),
+                $"[yellow]{e.Level}[/]",
+                Bar("HP", hp.Current, hp.Modified, w, "red1"),
+                Bar("MP", mp.Current, mp.Modified, w, "deepskyblue1"),
+                Bar("TP", tp.Current, tp.Modified, w, "orchid")
+            );
+        }
+        AnsiConsole.Write(enemiesTable);
     }
 }
