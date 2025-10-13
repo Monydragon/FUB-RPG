@@ -18,6 +18,9 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
     private readonly Dictionary<Guid, bool> _defendingActors = new();
     private readonly IGameState _state;
 
+    // Hold current planned actions to display during execution
+    private List<string>? _currentPlannedActions;
+
     public TurnBasedCombatResolver(IGameState state)
     {
         _state = state;
@@ -267,6 +270,7 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
         _flashEnemyId = null; _flashEnemyTicks = 0; _flashAllyId = null; _flashAllyTicks = 0;
         _messageLog.Clear();
         _logScrollOffset = 0;
+        _currentPlannedActions = null;
 
         AnsiConsole.Clear();
         AnsiConsole.Write(new Rule("[bold red]\u2694\ufe0f  COMBAT INITIATED  \u2694\ufe0f[/]").RuleStyle("red"));
@@ -399,6 +403,9 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
             }
         }
 
+        // Persist planned actions for display during execution
+        _currentPlannedActions = BuildPlannedDescriptions(plannedByIndex);
+
         // Collect planned and enemy actions
         var actions = plannedByIndex.Where(a => a != null).Cast<ICombatAction>().ToList();
 
@@ -426,20 +433,24 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
                 continue;
 
             ExecuteAction(action, session);
-            // Re-render after each action so numbers/bars update live
+            // Re-render after each action so numbers/bars update live; keep planned actions visible
             RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
             Sleep(300);
         }
 
         AnsiConsole.WriteLine();
-        // Move the continue prompt to the bottom message area
+        // Move the continue prompt to the bottom message area (keep planned actions visible until user continues)
         ShowPrompt(session, "[grey]Press any key to continue...[/]");
 
         // Regenerate small MP/TP per turn for all alive combatants
         RegenerateResources(session.Allies.Where(a => a.GetStat(StatType.Health).Current > 0), mpPct: 0.03, tpPct: 0.04);
         RegenerateResources(session.Enemies.Where(a => a.GetStat(StatType.Health).Current > 0), mpPct: 0.03, tpPct: 0.04);
 
+        // Final re-render for end-of-turn state (still showing planned actions)
         RenderCombatScene(session, current: null, plannedActions: null, animationFrame: null);
+
+        // Clear planned actions after the turn is fully over
+        _currentPlannedActions = null;
     }
 
     public void EndCombat(ICombatSession session)
@@ -464,6 +475,12 @@ public sealed class TurnBasedCombatResolver : ICombatResolver
     {
         // Always clear to keep layers in the right order
         AnsiConsole.Clear();
+
+        // Fallback to current turn's planned actions to keep them visible during execution
+        if (plannedActions == null && _currentPlannedActions != null)
+        {
+            plannedActions = _currentPlannedActions;
+        }
 
         // Create quick lookup for planned actions per ally name
         Dictionary<string, string>? plannedByName = null;
