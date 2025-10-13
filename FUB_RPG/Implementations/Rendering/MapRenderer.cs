@@ -46,18 +46,8 @@ public sealed class MapRenderer
 
     public void Render(IMap map, IParty party)
     {
-        // Don't clear here; caller manages screen. Render map area only.
         var mapText = RenderToString(map, party);
         AnsiConsole.Write(new Markup(mapText));
-    }
-
-    private static string Box(string inner)
-    {
-        inner = inner.Length > 5 ? inner.Substring(0,5) : inner;
-        int padLeft = (5 - inner.Length) / 2;
-        int padRight = 5 - inner.Length - padLeft;
-        var content = new string(' ', padLeft) + inner + new string(' ', padRight);
-        return "[[" + content + "]]"; // no color
     }
 
     private static string BoxColored(string inner, string color)
@@ -69,25 +59,64 @@ public sealed class MapRenderer
         return $"[{color}][[{content}]][/]";
     }
 
+    // Allow rich markup inside the box; when centered, add left padding to center the visible content
+    private static string BoxMarkup(string innerMarkup, int visibleLen, bool center)
+    {
+        int padLeft = center ? (5 - visibleLen) / 2 : 0;
+        int padRight = Math.Max(0, 5 - visibleLen - padLeft);
+        return "[[" + new string(' ', padLeft) + innerMarkup + new string(' ', padRight) + "]]";
+    }
+
+    private static string ColorForChar(char ch)
+    {
+        return ch switch
+        {
+            'P' => "green",
+            'E' => "red",
+            'N' => "dodgerblue1",
+            'I' => "yellow1",
+            'C' => "orange1",
+            'S' => "springgreen1",
+            '>' => "violet",
+            _ => "white"
+        };
+    }
+
     private string RenderCell(IMap map, IParty party, IActor leader, int x, int y)
     {
         if (leader.X == x && leader.Y == y)
-            return BoxColored("P", "green");
-
-        bool hasEnemy = map.Objects.Any(o => o.X == x && o.Y == y && o.ObjectKind == MapObjectKind.Enemy);
-        bool hasNpc   = map.Objects.Any(o => o.X == x && o.Y == y && o.ObjectKind == MapObjectKind.Npc);
-        bool hasItem  = map.Objects.Any(o => o.X == x && o.Y == y && o.ObjectKind == MapObjectKind.Item);
-        bool hasPortal = map.Objects.Any(o => o.X == x && o.Y == y && o.ObjectKind == MapObjectKind.Portal);
-        if (hasEnemy || hasNpc || hasItem || hasPortal)
         {
-            var sbInner = new StringBuilder();
-            if (hasEnemy) sbInner.Append('E');
-            if (hasNpc)   sbInner.Append('N');
-            if (hasItem)  sbInner.Append('I');
-            if (hasPortal) sbInner.Append('>');
-            // Priority color Enemy > Portal > NPC > Item
-            var color = hasEnemy ? "red" : hasPortal ? "violet" : hasNpc ? "blue" : "yellow";
-            return BoxColored(sbInner.ToString(), color);
+            return BoxMarkup("[green]P[/]", 1, center: true);
+        }
+
+        var objs = map.Objects.Where(o => o.X == x && o.Y == y).ToList();
+        if (objs.Count > 0)
+        {
+            var chars = new StringBuilder();
+            int visible = 0;
+            void add(char c)
+            {
+                if (visible >= 5) return;
+                string color = ColorForChar(c);
+                chars.Append('[').Append(color).Append(']').Append(c).Append("[/]");
+                visible += 1;
+            }
+
+            // Order by importance for rendering
+            foreach (var o in objs.Where(o => o.ObjectKind == MapObjectKind.Enemy)) add('E');
+            foreach (var o in objs.Where(o => o.ObjectKind == MapObjectKind.Npc)) add('N');
+            foreach (var o in objs.Where(o => o.ObjectKind == MapObjectKind.Item)) add('I');
+            foreach (var o in objs.Where(o => o.ObjectKind == MapObjectKind.Interactable))
+            {
+                // Try to pick a letter based on name/category
+                char c = 'C';
+                var name = o.Name?.ToLowerInvariant() ?? string.Empty;
+                if (name.Contains("shop")) c = 'S';
+                else if (name.Contains("chest")) c = 'C';
+                add(c);
+            }
+            foreach (var o in objs.Where(o => o.ObjectKind == MapObjectKind.Portal)) add('>');
+            return BoxMarkup(chars.ToString(), visible, center: false);
         }
 
         return map.GetTile(x, y).TileType switch

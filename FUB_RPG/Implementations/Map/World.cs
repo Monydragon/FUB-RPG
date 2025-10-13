@@ -5,7 +5,7 @@ using Fub.Implementations.Progression.FubWithAgents.Interfaces.Game;
 using Fub.Interfaces.Map;
 using Fub.Interfaces.Game;
 
-namespace Fub.Implementations.Game;
+namespace Fub.Implementations.Map;
 
 public sealed class World : IWorld
 {
@@ -16,10 +16,14 @@ public sealed class World : IWorld
     public string Name { get; }
     public IReadOnlyList<IMap> Maps => _maps;
 
+    // New: world seed for deterministic generation
+    public int Seed { get; }
+
     public World(string name)
     {
         Id = Guid.NewGuid();
         Name = name;
+        Seed = Environment.TickCount;
     }
 
     public IMap? GetMap(Guid mapId) => _maps.FirstOrDefault(m => m.Id == mapId);
@@ -50,4 +54,3 @@ public sealed class World : IWorld
         _connections[(fromMapId, exitName)] = (toMapId, toX, toY);
     }
 }
-

@@ -9,6 +9,7 @@ public interface IWorld
 {
     Guid Id { get; }
     string Name { get; }
+    int Seed { get; } // Added for deterministic generation
     IReadOnlyList<IMap> Maps { get; }
     IMap? GetMap(Guid mapId);
     void AddMap(IMap map);
