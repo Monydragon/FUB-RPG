@@ -102,6 +102,12 @@ public class ChestConfiguration
     public int MaxRespawns { get; set; } = -1; // -1 = infinite
     public bool RespawnOnMapReset { get; set; } = true;
     
+    // Loot configuration for simple usage
+    public int MinGold { get; set; } = 0;
+    public int MaxGold { get; set; } = 100;
+    public int MinItems { get; set; } = 0;
+    public int MaxItems { get; set; } = 3;
+    
     // Visual and interaction
     public string ChestModel { get; set; } = "wooden_chest";
     public string OpenSound { get; set; } = "chest_open";

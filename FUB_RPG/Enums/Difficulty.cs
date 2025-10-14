@@ -3,9 +3,11 @@
 public enum Difficulty
 {
     Story,
+    VeryEasy,
+    Easy,
     Normal,
     Hard,
-    Nightmare,
-    Ultra
+    Ultra,
+    Nightmare
 }
 

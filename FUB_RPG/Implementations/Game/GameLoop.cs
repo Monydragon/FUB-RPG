@@ -592,49 +592,82 @@ public sealed class GameLoop : IGameLoop
         // Compute total EXP from enemies
         long totalExp = enemyActors.Sum(e => (long)(50 * System.Math.Pow(e.Level, 1.5)));
 
-        // Apply EXP and capture level ups
-        var results = new List<(IActor actor, int before, int after, long gained, bool leveled)>();
+        // Build rewards per ally and apply experience
+        var xpCalculator = new Fub.Implementations.Progression.ExperienceCalculator();
+        var victoryScreen = new Fub.Implementations.Combat.VictoryScreen(xpCalculator);
+
+        var rewardsList = new List<Fub.Implementations.Combat.VictoryRewards>();
+
         foreach (var ally in _state.Party.Members)
         {
             var job = ally.EffectiveClass;
             int before = preLevels.TryGetValue(ally.Id, out var lvl) ? lvl : ally.JobSystem.GetJobLevel(job).Level;
-            bool leveled = ally.JobSystem.AddExperience(job, totalExp);
+
+            // Capture pre-battle stat snapshot
+            var preStats = ally.AllStats.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Modified);
+
+            // Capture pre-known abilities if the actor has an ability book
+            HashSet<Guid> preAbilities = new();
+            if (ally is Fub.Interfaces.Abilities.IHasAbilityBook hasBook)
+            {
+                preAbilities = hasBook.AbilityBook.KnownAbilities.Select(a => a.Id).ToHashSet();
+            }
+
+            // Apply EXP to the job system (this should update level/experience)
+            ally.JobSystem.AddExperience(job, totalExp);
+
             int after = ally.JobSystem.GetJobLevel(job).Level;
-            bool learned = false;
-            // Hook: if ability system ties learning to level ups, it would be triggered by AddExperience internally.
-            results.Add((ally, before, after, totalExp, learned));
+            int levelsGained = Math.Max(0, after - before);
+
+            // Compute stat changes (compare modified values)
+            var statChanges = new List<Fub.Implementations.Combat.VictoryStatChange>();
+            foreach (var kv in ally.AllStats)
+            {
+                var type = kv.Key;
+                var newVal = kv.Value.Modified;
+                preStats.TryGetValue(type, out var oldVal);
+                if (newVal != oldVal)
+                {
+                    statChanges.Add(new Fub.Implementations.Combat.VictoryStatChange { Stat = type, OldValue = oldVal, NewValue = newVal });
+                }
+            }
+
+            // Compute newly learned abilities (difference between post and pre sets)
+            var learned = new List<string>();
+            if (ally is Fub.Interfaces.Abilities.IHasAbilityBook hasBookAfter)
+            {
+                foreach (var abil in hasBookAfter.AbilityBook.KnownAbilities)
+                {
+                    if (!preAbilities.Contains(abil.Id))
+                    {
+                        learned.Add(abil.Name);
+                    }
+                }
+            }
+
+            var rewards = new Fub.Implementations.Combat.VictoryRewards
+            {
+                ExperienceGained = totalExp,
+                GoldGained = 0,
+                ItemsDropped = new List<IItem>(),
+                OldLevel = before,
+                NewLevel = after,
+                LevelsGained = levelsGained,
+                StatChanges = statChanges,
+                LearnedAbilities = learned
+            };
+            rewardsList.Add(rewards);
         }
 
-        // Render results
+        // Show a single consolidated victory screen for the whole party
+        victoryScreen.DisplayPartyVictory(_state.Party.Members.ToList(), rewardsList, animationSpeedMs: 30);
+
+        // After showing party victory, mark UI for refresh and log victory
         AnsiConsole.Clear();
-        AnsiConsole.Write(new Rule("[bold green]\uD83C\uDF89 Victory Results \uD83C\uDF89[/]").RuleStyle("green"));
+        AnsiConsole.Write(new Rule("[bold green]\ud83c\udf89 Victory! \ud83c\udf89[/]").RuleStyle("green"));
         AnsiConsole.WriteLine();
+        AddLog("Victory!");
 
-        var table = new Table().Border(TableBorder.Rounded);
-        table.AddColumn("Ally");
-        table.AddColumn("Job");
-        table.AddColumn("Level");
-        table.AddColumn("EXP");
-        foreach (var r in results)
-        {
-            string levelText = r.before == r.after ? $"{r.after}" : $"{r.before} \u2192 [yellow]{r.after}[/]";
-            table.AddRow(r.actor.Name, r.actor.EffectiveClass.ToString(), levelText, "+" + r.gained);
-        }
-        AnsiConsole.Write(table);
-        AnsiConsole.WriteLine();
-
-        // Show EXP bars per ally
-        foreach (var m in _state.Party.Members)
-        {
-            var jl = m.JobSystem.GetJobLevel(m.EffectiveClass);
-            double expCurrent = jl.Experience;
-            double expMax = Math.Max(1, jl.ExperienceToNextLevel);
-            var bar = Bar("EXP", expCurrent, expMax, width: 40, color: "yellow");
-            AnsiConsole.MarkupLine($"[bold]{m.Name}[/] {bar}");
-        }
-
-        AnsiConsole.MarkupLine("\n[grey]Press any key to continue...[/]");
-        InputWaiter.WaitForAny(_state.InputMode);
         _uiInitialized = false; // ensure next explore frame redraws
     }
 

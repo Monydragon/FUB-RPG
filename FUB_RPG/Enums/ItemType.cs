@@ -13,6 +13,7 @@ public enum ItemType
     Equipment,
     Weapon,
     Armor,
-    Trinket
+    Trinket,
+    KeyItem
 }
 
