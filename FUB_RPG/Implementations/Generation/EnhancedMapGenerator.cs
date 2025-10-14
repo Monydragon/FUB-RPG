@@ -36,7 +36,8 @@ public sealed class EnhancedMapGenerator : IMapGenerator
 
     private IMap GenerateCity(IMapGenerationConfig config, System.Random rng)
     {
-        var map = new GameMap($"City-{rng.Next(1000, 9999)}", config.Theme, config.Width, config.Height, config.Kind);
+        var townName = GenerateTownName(rng);
+        var map = new GameMap($"Town of {townName}", config.Theme, config.Width, config.Height, config.Kind);
         
         // Create city blocks with streets
         int blockSize = rng.Next(8, 15);
@@ -74,15 +75,18 @@ public sealed class EnhancedMapGenerator : IMapGenerator
                 if (buildingW > 3 && buildingH > 3)
                 {
                     var room = new Room(RoomType.Shop, bx + 1, by + 1, buildingW, buildingH);
-                    CarveRoom(map, room);
+                    CarveRoom((GameMap)map, room);
                     map.AddRoom(room);
                     
                     // Add door to street
                     int doorX = bx + rng.Next(2, buildingW - 1);
-                    if (by > 0) map.SetTile(doorX, by, MapTileType.Floor);
+                    if (by > 0) ((GameMap)map).SetTile(doorX, by, MapTileType.Floor);
                 }
             }
         }
+
+        // Place four city gates on edges for consistent entry/exit
+        PlaceCityGates((GameMap)map);
         
         return map;
     }
@@ -431,5 +435,64 @@ public sealed class EnhancedMapGenerator : IMapGenerator
 
         map.AddObject(new MapPortalObject("Exit-A", a.x, a.y));
         map.AddObject(new MapPortalObject("Exit-B", b.x, b.y));
+    }
+
+    private static void PlaceCityGates(GameMap map)
+    {
+        // North Gate
+        int nx = map.Width / 2;
+        int ny = FindEdgeFloorY(map, 0, +1, nx);
+        map.SetTile(nx, Math.Clamp(ny, 0, map.Height - 1), MapTileType.Floor);
+        map.AddObject(new MapPortalObject("North Gate", nx, ny));
+
+        // South Gate
+        int sx = map.Width / 2;
+        int sy = FindEdgeFloorY(map, map.Height - 1, -1, sx);
+        map.SetTile(sx, Math.Clamp(sy, 0, map.Height - 1), MapTileType.Floor);
+        map.AddObject(new MapPortalObject("South Gate", sx, sy));
+
+        // West Gate
+        int wy = map.Height / 2;
+        int wx = FindEdgeFloorX(map, 0, +1, wy);
+        map.SetTile(Math.Clamp(wx, 0, map.Width - 1), wy, MapTileType.Floor);
+        map.AddObject(new MapPortalObject("West Gate", wx, wy));
+
+        // East Gate
+        int ey = map.Height / 2;
+        int ex = FindEdgeFloorX(map, map.Width - 1, -1, ey);
+        map.SetTile(Math.Clamp(ex, 0, map.Width - 1), ey, MapTileType.Floor);
+        map.AddObject(new MapPortalObject("East Gate", ex, ey));
+    }
+
+    private static int FindEdgeFloorY(GameMap map, int startY, int dir, int x)
+    {
+        for (int y = startY; y >= 0 && y < map.Height; y += dir)
+        {
+            if (map.GetTile(x, y).TileType == MapTileType.Floor)
+                return y;
+        }
+        return Math.Clamp(startY, 0, map.Height - 1);
+    }
+
+    private static int FindEdgeFloorX(GameMap map, int startX, int dir, int y)
+    {
+        for (int x = startX; x >= 0 && x < map.Width; x += dir)
+        {
+            if (map.GetTile(x, y).TileType == MapTileType.Floor)
+                return x;
+        }
+        return Math.Clamp(startX, 0, map.Width - 1);
+    }
+
+    private static string GenerateTownName(System.Random rng)
+    {
+        // Simple syllable-based name generator
+        string[] starts = { "Ald", "Bren", "Cal", "Dun", "Eld", "Fal", "Glen", "Hal", "Iron", "Jun", "Kelm", "Lyn", "Mar", "Nor", "Oak", "Port", "Quel", "Riv", "Stone", "Thorn", "Umber", "Val", "Wyn", "Xan", "Yor", "Zed" };
+        string[] middles = { "a", "e", "i", "o", "u", "ae", "ia", "oa", "ui", "ou" };
+        string[] ends = { "dale", "ford", "wick", "mont", "borough", "stead", "bridge", "haven", "gate", "ridge", "view", "moor", "fell", "port", "field", "mark" };
+        string s = starts[rng.Next(starts.Length)];
+        string m = rng.NextDouble() < 0.6 ? middles[rng.Next(middles.Length)] : string.Empty;
+        string e = ends[rng.Next(ends.Length)];
+        return s + m + e;
     }
 }

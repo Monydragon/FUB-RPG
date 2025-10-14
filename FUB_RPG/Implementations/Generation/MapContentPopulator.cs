@@ -42,6 +42,16 @@ public sealed class MapContentPopulator : IMapContentPopulator
 
         // Occupancy helpers
         bool IsOccupied((int x, int y) pos) => map.GetObjectsAt(pos.x, pos.y).Any();
+        (int x, int y)? FindFreeFloor()
+        {
+            foreach (var pos in floors)
+            {
+                if (!FarEnough(pos)) continue;
+                if (IsOccupied(pos)) continue;
+                return pos;
+            }
+            return null;
+        }
 
         // Determine desired counts based on map kind (safe zones)
         int desiredEnemies = cfg.EnemyCount;
@@ -54,15 +64,15 @@ public sealed class MapContentPopulator : IMapContentPopulator
         {
             // Town rules
             desiredEnemies = 0; // absolutely no enemies in towns
-            // NPCs: at least configured range based on map size
-            int minTownNpcs = Math.Max(1, cfg.TownMinNpcs);
-            int maxTownNpcs = Math.Max(cfg.TownMaxNpcs, (map.Width * map.Height) / 120);
+            // More lively towns
+            int minTownNpcs = Math.Max(3, cfg.TownMinNpcs);
+            int maxTownNpcs = Math.Max(cfg.TownMaxNpcs, (map.Width * map.Height) / 100);
             desiredNpcs = Math.Max(desiredNpcs, rng.Next(minTownNpcs, maxTownNpcs + 1));
             // Items: a few scattered pickups
-            desiredItems = Math.Max(desiredItems, Math.Max(2, map.Width * map.Height / 400));
+            desiredItems = Math.Max(desiredItems, Math.Max(3, map.Width * map.Height / 350));
             chestCount = Math.Max(1, map.Width * map.Height / 900);
-            // Shops: at least configured minimum
-            shopCount = Math.Max(cfg.TownMinShops, Math.Max(1, map.Width * map.Height / 900));
+            // Shops: at least configured minimum and a general shop later guaranteed
+            shopCount = Math.Max(cfg.TownMinShops, Math.Max(2, map.Width * map.Height / 800));
         }
         else if (map.Kind == MapKind.Overworld)
         {
@@ -118,7 +128,8 @@ public sealed class MapContentPopulator : IMapContentPopulator
             if (!FarEnough(pos)) continue;
             if (IsOccupied(pos)) continue;
             var itemName = PickRandom(rng, new[] { "Potion", "Coin", "Herb", "Gem", "Scroll" });
-            var item = new SimpleItem(itemName, ItemType.Consumable, RarityTier.Common, stackable: false);
+            bool stackable = !string.Equals(itemName, "Gem", StringComparison.OrdinalIgnoreCase) && !string.Equals(itemName, "Scroll", StringComparison.OrdinalIgnoreCase);
+            var item = new SimpleItem(itemName, ItemType.Consumable, RarityTier.Common, stackable: stackable, maxStackSize: 99);
             map.AddObject(new MapItemObject(itemName, item, pos.x, pos.y));
             itemsPlaced++;
         }
@@ -134,27 +145,58 @@ public sealed class MapContentPopulator : IMapContentPopulator
             chestsPlaced++;
         }
 
-        // Place themed shops (MapShopObject), 3–10 inventory items each
+        // Place themed shops (MapShopObject), inventory with stock quantities
         int shopsPlaced = 0;
-        // Shop themes to use in towns: Weapon, Armor, Item, General
-        var availableThemes = new[] { ShopTheme.Weapon, ShopTheme.Armor, ShopTheme.Item, ShopTheme.General };
+        var availableThemes = new[] { ShopTheme.Weapon, ShopTheme.Armor, ShopTheme.Item };
         foreach (var pos in floors)
         {
             if (shopsPlaced >= shopCount) break;
             if (!FarEnough(pos)) continue;
             if (IsOccupied(pos)) continue;
             var theme = PickRandom(rng, availableThemes);
-            int stock = rng.Next(Math.Max(1, cfg.ShopStockMin), Math.Max(cfg.ShopStockMin + 1, cfg.ShopStockMax + 1)); // inclusive bounds
-            var inventory = BuildShopInventory(rng, theme, stock);
-            string name = theme switch
-            {
-                ShopTheme.Weapon => "Weapon Shop",
-                ShopTheme.Armor => "Armor Shop",
-                ShopTheme.Item => "Item Shop",
-                _ => "General Shop"
-            };
+            int stock = rng.Next(Math.Max(3, cfg.ShopStockMin), Math.Max(cfg.ShopStockMin + 1, cfg.ShopStockMax + 1)); // inclusive bounds
+            var inventory = BuildShopInventoryWithStock(rng, theme, stock);
+            string name = theme switch { ShopTheme.Weapon => "Weapon Shop", ShopTheme.Armor => "Armor Shop", ShopTheme.Item => "Item Shop", _ => "Shop" };
             map.AddObject(new MapShopObject(name, theme, inventory, pos.x, pos.y));
             shopsPlaced++;
+        }
+
+        // Guarantee a General Shop in towns with healing, tents, potions etc.
+        if (map.Kind == MapKind.Town)
+        {
+            bool hasGeneral = map.Objects.Any(o => o.ObjectKind == MapObjectKind.Interactable && o.Name.Contains("Shop", StringComparison.OrdinalIgnoreCase) && o.Name.Contains("General", StringComparison.OrdinalIgnoreCase));
+            if (!hasGeneral)
+            {
+                var spot = FindFreeFloor();
+                if (spot.HasValue)
+                {
+                    var inv = BuildGeneralMerchantInventory(rng);
+                    map.AddObject(new MapShopObject("General Shop", ShopTheme.General, inv, spot.Value.x, spot.Value.y));
+                }
+            }
+
+            // Guarantee a Quest NPC near center
+            bool hasQuestNpc = map.Objects.Any(o => o.ObjectKind == MapObjectKind.Npc && (o.Name.Contains("Quest", StringComparison.OrdinalIgnoreCase) || o.Name.Contains("Mayor", StringComparison.OrdinalIgnoreCase)));
+            if (!hasQuestNpc)
+            {
+                // Try to place in a central room if possible
+                (int x, int y) = (map.Width / 2, map.Height / 2);
+                // Find nearest free floor tile to center
+                int bestDist = int.MaxValue; (int bx, int by) best = (x, y);
+                for (int yy = 0; yy < map.Height; yy++)
+                {
+                    for (int xx = 0; xx < map.Width; xx++)
+                    {
+                        if (map.GetTile(xx, yy).TileType != MapTileType.Floor) continue;
+                        if (IsOccupied((xx, yy))) continue;
+                        int d = Math.Abs(xx - x) + Math.Abs(yy - y);
+                        if (d < bestDist) { bestDist = d; best = (xx, yy); }
+                    }
+                }
+                var mayor = new NpcActor("Quest Giver", Species.Human, ActorClass.Adventurer, best.bx, best.by);
+                var lines = new List<string>{ "Welcome to our town!", "We could use your help. Seek the old ruins to the east.", "Bring back any relics you find." };
+                map.AddObject(new MapNpcObject(mayor.Name, mayor, best.bx, best.by, lines));
+            }
         }
     }
 
@@ -192,31 +234,42 @@ public sealed class MapContentPopulator : IMapContentPopulator
         return lines;
     }
 
-    private static List<(Fub.Interfaces.Items.IItem item, int price)> BuildShopInventory(System.Random rng, ShopTheme theme, int count)
+    private static List<MapShopObject.StockEntry> BuildShopInventoryWithStock(System.Random rng, ShopTheme theme, int count)
     {
-        var list = new List<(Fub.Interfaces.Items.IItem item, int price)>();
+        var list = new List<MapShopObject.StockEntry>();
         for (int i = 0; i < count; i++)
         {
             switch (theme)
             {
                 case ShopTheme.Weapon:
-                    list.Add(MakeWeapon(rng));
+                    { var (it, price) = MakeWeapon(rng); list.Add(new MapShopObject.StockEntry(it, price, 1)); }
                     break;
                 case ShopTheme.Armor:
-                    list.Add(MakeArmor(rng));
+                    { var (it, price) = MakeArmor(rng); list.Add(new MapShopObject.StockEntry(it, price, 1)); }
                     break;
                 case ShopTheme.Item:
-                    list.Add(MakeConsumable(rng));
-                    break;
                 default:
-                    // General: mix
-                    int roll = rng.Next(3);
-                    if (roll == 0) list.Add(MakeWeapon(rng));
-                    else if (roll == 1) list.Add(MakeArmor(rng));
-                    else list.Add(MakeConsumable(rng));
+                    { var (it, price) = MakeConsumable(rng); int qty = rng.Next(3, 11); list.Add(new MapShopObject.StockEntry(it, price, qty)); }
                     break;
             }
         }
+        return list;
+    }
+
+    private static List<MapShopObject.StockEntry> BuildGeneralMerchantInventory(System.Random rng)
+    {
+        var list = new List<MapShopObject.StockEntry>();
+        // Core consumables with healthy stock
+        list.Add(new MapShopObject.StockEntry(new SimpleItem("Potion", ItemType.Consumable, RarityTier.Common, stackable: true, maxStackSize: 99, baseValue: 15), 15, rng.Next(15, 31)));
+        list.Add(new MapShopObject.StockEntry(new SimpleItem("Hi-Potion", ItemType.Consumable, RarityTier.Uncommon, stackable: true, maxStackSize: 99, baseValue: 40), 45, rng.Next(8, 16)));
+        list.Add(new MapShopObject.StockEntry(new SimpleItem("Ether", ItemType.Consumable, RarityTier.Uncommon, stackable: true, maxStackSize: 99, baseValue: 35), 35, rng.Next(8, 16)));
+        list.Add(new MapShopObject.StockEntry(new SimpleItem("Elixir", ItemType.Consumable, RarityTier.Rare, stackable: true, maxStackSize: 99, baseValue: 90), 90, rng.Next(3, 7)));
+        list.Add(new MapShopObject.StockEntry(new SimpleItem("Antidote", ItemType.Consumable, RarityTier.Common, stackable: true, maxStackSize: 99, baseValue: 12), 12, rng.Next(10, 21)));
+        list.Add(new MapShopObject.StockEntry(new SimpleItem("Tent", ItemType.Consumable, RarityTier.Common, stackable: true, maxStackSize: 20, baseValue: 60), 60, rng.Next(3, 8)));
+        list.Add(new MapShopObject.StockEntry(new SimpleItem("Phoenix Down", ItemType.Consumable, RarityTier.Rare, stackable: true, maxStackSize: 99, baseValue: 120), 120, rng.Next(2, 6)));
+        // Common materials
+        list.Add(new MapShopObject.StockEntry(new SimpleItem("Herb", ItemType.Material, RarityTier.Common, stackable: true, maxStackSize: 99, baseValue: 8), 8, rng.Next(10, 26)));
+        list.Add(new MapShopObject.StockEntry(new SimpleItem("Bandage", ItemType.Consumable, RarityTier.Common, stackable: true, maxStackSize: 99, baseValue: 10), 10, rng.Next(8, 18)));
         return list;
     }
 
@@ -226,7 +279,8 @@ public sealed class MapContentPopulator : IMapContentPopulator
         var name = PickRandom(rng, names);
         var rarity = rng.NextDouble() < 0.15 ? RarityTier.Rare : RarityTier.Common;
         var price = rarity == RarityTier.Rare ? rng.Next(40, 91) : rng.Next(10, 31);
-        var item = new SimpleItem(name, ItemType.Consumable, rarity, stackable: false);
+        // Make consumables stackable by default
+        var item = new SimpleItem(name, ItemType.Consumable, rarity, stackable: true, maxStackSize: 99);
         return (item, price);
     }
 

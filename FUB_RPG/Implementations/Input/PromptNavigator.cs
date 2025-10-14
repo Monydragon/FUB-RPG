@@ -33,7 +33,14 @@ public static class PromptNavigator
             int minRows = 6;
             int viewport = Math.Max(minRows, Console.WindowHeight - reserved);
             int page = Math.Max(3, Math.Min(choices.Count, viewport));
-            return AnsiConsole.Prompt(new SelectionPrompt<string>().Title(title).PageSize(page).AddChoices(choices));
+            // Escape labels to avoid Spectre markup parsing issues
+            return AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title(title)
+                    .PageSize(page)
+                    .UseConverter(s => Markup.Escape(s ?? string.Empty))
+                    .AddChoices(choices)
+            );
         }
         return PromptChoiceController(title, choices, controllerType, renderBackground);
     }
@@ -46,7 +53,14 @@ public static class PromptNavigator
             int minRows = 6;
             int viewport = Math.Max(minRows, Console.WindowHeight - reserved);
             int page = Math.Max(3, Math.Min(choices.Count, viewport));
-            return AnsiConsole.Prompt(new SelectionPrompt<T>().Title(title).PageSize(page).AddChoices(choices));
+            // Escape labels derived from T.ToString()
+            return AnsiConsole.Prompt(
+                new SelectionPrompt<T>()
+                    .Title(title)
+                    .PageSize(page)
+                    .UseConverter(item => Markup.Escape(item?.ToString() ?? string.Empty))
+                    .AddChoices(choices)
+            );
         }
         var labels = choices.Select(c => c.ToString() ?? string.Empty).ToList();
         var pickedLabel = PromptChoiceController(title, labels, controllerType, renderBackground);
@@ -106,7 +120,9 @@ public static class PromptNavigator
                 int j = top + i;
                 bool sel = (j == index);
                 string pointer = sel ? "[yellow]\u27a4[/]" : " ";
-                string label = sel ? $"[bold]{choices[j]}[/]" : choices[j];
+                // Escape the label content to avoid invalid markup like [x10]
+                string safe = Markup.Escape(choices[j] ?? string.Empty);
+                string label = sel ? $"[bold]{safe}[/]" : safe;
                 table.AddRow(pointer, label);
             }
             AnsiConsole.Write(table);

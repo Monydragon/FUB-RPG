@@ -467,37 +467,41 @@ public sealed class GameLoop : IGameLoop
                 return;
             }
 
-            var menu = richShop.Inventory.Select(e => $"Buy {e.item.Name} ({e.price}g)").ToList();
+            // Build menu with stock counts
+            var menu = richShop.Inventory.Select(e => $"Buy {e.Item.Name} ({e.Price}g) [x{e.Quantity}]").ToList();
             menu.Add("Leave");
             var pick = PromptNavigator.PromptChoice($"[bold]{shop.Name}[/]", menu, _state);
             if (pick == "Leave") return;
-            var match = richShop.Inventory.FirstOrDefault(e => pick.Contains(e.item.Name));
-            if (match.item == null)
+            var chosen = richShop.Inventory.FirstOrDefault(e => pick.Contains(e.Item.Name));
+            if (chosen == null)
             {
                 AddLog("Item not found.");
                 return;
             }
-
-            // Check capacity before charging or removing stock
-            var leader = _state.Party.Leader;
-            if (!leader.Inventory.CanAdd(match.item, 1))
+            if (chosen.Quantity <= 0)
             {
-                AddLog($"Can't carry {match.item.Name}. Inventory full.");
+                AddLog("That item is out of stock.");
                 return;
             }
 
-            if (_state.Party.Gold < match.price || !_state.Party.TrySpendGold(match.price))
+            var leader = _state.Party.Leader;
+            if (!leader.Inventory.CanAdd(chosen.Item, 1))
+            {
+                AddLog($"Can't carry {chosen.Item.Name}. Inventory full.");
+                return;
+            }
+            if (_state.Party.Gold < chosen.Price || !_state.Party.TrySpendGold(chosen.Price))
             {
                 AddLog("Not enough gold.");
                 return;
             }
 
             // Remove from shop stock and add to inventory
-            if (!richShop.TryTakeItem(match.item.Name, out var purchased))
+            if (!richShop.TryTakeItem(chosen.Item.Name, out var purchased))
             {
                 AddLog("That item is no longer available.");
                 // Refund gold
-                _state.Party.AddGold(match.price);
+                _state.Party.AddGold(chosen.Price);
                 return;
             }
 

@@ -97,16 +97,21 @@ public sealed class MapRegistry
     public (IMap map, int x, int y) UsePortal(IMap currentMap, string exitName)
     {
         var key = $"{currentMap.Id}:{exitName}";
-        
+
         if (!_exitRegistry.TryGetValue(key, out var exitInfo))
         {
             // Generate default destination based on exit name
             exitInfo = GenerateDefaultExit(currentMap, exitName);
             _exitRegistry[key] = exitInfo;
         }
-        
+
         var destMap = GetOrGenerateMap(exitInfo.ToMapKey);
-        
+
+        // Find the source portal position to compute relative spawn if needed
+        var sourcePortal = currentMap.Objects.FirstOrDefault(o => o.ObjectKind == MapObjectKind.Portal && string.Equals(o.Name, exitName, StringComparison.OrdinalIgnoreCase));
+        int fromX = sourcePortal?.X ?? currentMap.Width / 2;
+        int fromY = sourcePortal?.Y ?? currentMap.Height / 2;
+
         // Find spawn position
         int spawnX, spawnY;
         if (exitInfo.TargetX.HasValue && exitInfo.TargetY.HasValue)
@@ -116,13 +121,86 @@ public sealed class MapRegistry
         }
         else
         {
-            (spawnX, spawnY) = FindSpawnPosition(destMap);
+            // Compute relative spawn based on exit direction keywords
+            (spawnX, spawnY) = ComputeRelativeSpawn(currentMap, destMap, exitName, fromX, fromY);
+            // Store for next time
+            exitInfo.TargetX = spawnX;
+            exitInfo.TargetY = spawnY;
+            _exitRegistry[key] = exitInfo;
         }
-        
-        // Create return portal if it doesn't exist
-        EnsureReturnPortal(destMap, currentMap, exitName, exitInfo.ToMapKey);
-        
+
+        // Create return portal if it doesn't exist and register return mapping with precise coordinates
+        EnsureReturnPortal(destMap, currentMap, exitName, exitInfo.ToMapKey, spawnX, spawnY, fromX, fromY);
+
         return (destMap, spawnX, spawnY);
+    }
+
+    private (int x, int y) ComputeRelativeSpawn(IMap source, IMap dest, string exitName, int fromX, int fromY)
+    {
+        double px = source.Width > 1 ? (double)fromX / (source.Width - 1) : 0.5;
+        double py = source.Height > 1 ? (double)fromY / (source.Height - 1) : 0.5;
+        int approxX = (int)Math.Round(px * (dest.Width - 1));
+        int approxY = (int)Math.Round(py * (dest.Height - 1));
+
+        // Determine edge to place on (opposite edge in destination)
+        if (exitName.Contains("North", StringComparison.OrdinalIgnoreCase))
+        {
+            int y = FindEdgeFloorY(dest, dest.Height - 1, -1, approxX);
+            return (approxX, y);
+        }
+        if (exitName.Contains("South", StringComparison.OrdinalIgnoreCase))
+        {
+            int y = FindEdgeFloorY(dest, 0, +1, approxX);
+            return (approxX, y);
+        }
+        if (exitName.Contains("West", StringComparison.OrdinalIgnoreCase))
+        {
+            int x = FindEdgeFloorX(dest, dest.Width - 1, -1, approxY);
+            return (x, approxY);
+        }
+        if (exitName.Contains("East", StringComparison.OrdinalIgnoreCase))
+        {
+            int x = FindEdgeFloorX(dest, 0, +1, approxY);
+            return (x, approxY);
+        }
+
+        // Default: center-ish spawn
+        return FindSpawnPosition(dest);
+    }
+
+    private void EnsureReturnPortal(IMap destMap, IMap sourceMap, string originalExitName, string destMapKey, int toX, int toY, int fromX, int fromY)
+    {
+        // Create return portal on the destination map at the arrival point
+        string returnExitName = GetReturnExitName(originalExitName);
+
+        int rx = Math.Clamp(toX, 0, destMap.Width - 1);
+        int ry = Math.Clamp(toY, 0, destMap.Height - 1);
+        if (destMap.GetTile(rx, ry).TileType != MapTileType.Floor)
+        {
+            // Fallback to nearest spawn tile on destination map if blocked
+            var fallback = FindSpawnPosition(destMap);
+            rx = fallback.x; ry = fallback.y;
+        }
+
+        if (!destMap.Objects.Any(o => o.ObjectKind == MapObjectKind.Portal && o.Name == returnExitName && o.X == rx && o.Y == ry))
+        {
+            destMap.AddObject(new MapPortalObject(returnExitName, rx, ry));
+        }
+
+        // Register the reverse connection: destination return exit -> source map at the source portal location
+        var returnKey = $"{destMap.Id}:{returnExitName}";
+        if (!_exitRegistry.ContainsKey(returnKey))
+        {
+            var sourceKey = GetMapKey(sourceMap);
+            RegisterPortalConnection(destMap, returnExitName, sourceKey, fromX, fromY);
+        }
+
+        // Also ensure forward connection for the original exit is stored with exact arrival coordinates
+        var forwardKey = $"{sourceMap.Id}:{originalExitName}";
+        if (!_exitRegistry.ContainsKey(forwardKey))
+        {
+            RegisterPortalConnection(sourceMap, originalExitName, destMapKey, rx, ry);
+        }
     }
 
     private MapExitInfo GenerateDefaultExit(IMap currentMap, string exitName)
@@ -367,26 +445,6 @@ public sealed class MapRegistry
                     return (x, y);
         
         return (map.Width / 2, map.Height / 2);
-    }
-
-    private void EnsureReturnPortal(IMap destMap, IMap sourceMap, string originalExitName, string destMapKey)
-    {
-        // Create return portal if it doesn't exist
-        string returnExitName = GetReturnExitName(originalExitName);
-        
-        if (!destMap.Objects.Any(o => o.ObjectKind == MapObjectKind.Portal && o.Name == returnExitName))
-        {
-            var (x, y) = FindSpawnPosition(destMap);
-            destMap.AddObject(new MapPortalObject(returnExitName, x, y));
-        }
-        
-        // Register the return connection
-        var returnKey = $"{destMap.Id}:{returnExitName}";
-        if (!_exitRegistry.ContainsKey(returnKey))
-        {
-            var sourceKey = GetMapKey(sourceMap);
-            RegisterPortalConnection(destMap, returnExitName, sourceKey);
-        }
     }
 
     private string GetReturnExitName(string originalName)
