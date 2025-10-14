@@ -28,6 +28,7 @@ public static class ClassAbilityLearnset
 
         // Combat - Ranged
         { ActorClass.Ranger, new() { new Unlock(1, ()=> new PowerShot()), new Unlock(3, ()=> new HunterMark()) } },
+        { ActorClass.Hunter, new() { new Unlock(1, ()=> new HunterMark()), new Unlock(3, ()=> new PowerShot()) } },
         { ActorClass.Machinist, new() { new Unlock(1, ()=> new Drill()), new Unlock(4, ()=> new AutomatonQueen()) } },
         { ActorClass.Dancer, new() { new Unlock(1, ()=> new FanDance()), new Unlock(3, ()=> new DancePartner()) } },
         { ActorClass.Bard, new() { new Unlock(1, ()=> new PiercingArrow()), new Unlock(3, ()=> new BattleHymn()) } },

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using Fub.Enums; // Added for StatType / RarityTier / LevelCurveType
 using Fub.Implementations.Progression;
 using Fub.Interfaces.Actors;
 using Fub.Interfaces.Items;
@@ -30,7 +31,7 @@ public class VictoryRewards
 /// </summary>
 public class VictoryStatChange
 {
-    public Fub.Enums.StatType Stat { get; set; }
+    public StatType Stat { get; set; } // removed redundant qualifier
     public double OldValue { get; set; }
     public double NewValue { get; set; }
 }
@@ -83,7 +84,6 @@ public class VictoryScreen
         Console.Clear();
         DisplayVictoryHeader();
 
-        // Aggregate gold and items for a concise header
         var totalGold = rewardsList.Sum(r => r.GoldGained);
         var allItems = rewardsList.SelectMany(r => r.ItemsDropped).ToList();
         var aggregated = new VictoryRewards
@@ -95,20 +95,16 @@ public class VictoryScreen
 
         DisplayRewardsSection(aggregated);
 
-        // Compact overview: show all members with a small EXP bar (like party summary)
         Console.ForegroundColor = ConsoleColor.White;
         Console.WriteLine("--- Party Summary ---");
         Console.ResetColor();
         foreach (var ally in allies)
         {
             var jl = ally.JobSystem.GetJobLevel(ally.EffectiveClass);
-            // Show name and level only to avoid duplicate bars — the animated bar will be shown per-actor below
             Console.WriteLine($"  {ally.Name} (Lv {jl.Level})");
         }
-
         Console.WriteLine();
 
-        // Animate XP per ally in sequence and show stat/ability changes
         for (int i = 0; i < allies.Count; i++)
         {
             var ally = allies[i];
@@ -118,49 +114,19 @@ public class VictoryScreen
             Console.WriteLine($"--- {ally.Name} (Lv {rewards.OldLevel} → {rewards.NewLevel}) ---");
             Console.ResetColor();
 
-            // Animate XP for this ally
-            AnimateExperienceGain(ally, rewards, animationSpeedMs);
+            // Class/species subheader
+            Console.ForegroundColor = ConsoleColor.Gray;
+            Console.WriteLine($"  Species: {ally.Species}  |  Class: {ally.EffectiveClass}");
+            Console.ResetColor();
 
-            // Show stat increases
-            if (rewards.StatChanges != null && rewards.StatChanges.Count > 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine("  Stats Increased:");
-                Console.ResetColor();
-                foreach (var sc in rewards.StatChanges)
-                {
-                    var delta = sc.NewValue - sc.OldValue;
-                    if (delta > 0.0)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Green;
-                        Console.Write($"    +{delta:0.#} {sc.Stat}");
-                        Console.ResetColor();
-                        Console.WriteLine();
-                    }
-                }
-            }
+            // Use animated mode (simple:false) now that overlap handling is fixed
+            AnimateExperienceGain(ally, rewards, animationSpeedMs, simple: false);
 
-            // Show newly learned abilities
-            if (rewards.LearnedAbilities != null && rewards.LearnedAbilities.Count > 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Magenta;
-                Console.WriteLine("  Learned Abilities:");
-                Console.ResetColor();
-                foreach (var a in rewards.LearnedAbilities)
-                {
-                    Console.ForegroundColor = ConsoleColor.White;
-                    Console.WriteLine($"    • {a}");
-                    Console.ResetColor();
-                }
-            }
-
-            // Small pause between allies
-            Thread.Sleep(200);
-
+            ShowStatChanges(rewards);
+            ShowLearnedAbilities(rewards);
             Console.WriteLine();
         }
 
-        // Final per-ally summary
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.White;
         Console.WriteLine("═══ SUMMARY ═══");
@@ -175,7 +141,7 @@ public class VictoryScreen
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine($"{name}: +{r.ExperienceGained} XP (Lv {r.OldLevel} → {r.NewLevel})");
             Console.ResetColor();
-            if (r.LearnedAbilities != null && r.LearnedAbilities.Count > 0)
+            if (r.LearnedAbilities is { Count: > 0 })
             {
                 Console.ForegroundColor = ConsoleColor.Magenta;
                 Console.Write("    New Abilities: ");
@@ -186,6 +152,36 @@ public class VictoryScreen
 
         Console.WriteLine("\nPress any key to continue...");
         Console.ReadKey(true);
+    }
+
+    private static void ShowStatChanges(VictoryRewards rewards)
+    {
+        if (rewards.StatChanges is not { Count: > 0 }) return;
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("  Stats Increased:");
+        Console.ResetColor();
+        foreach (var sc in rewards.StatChanges)
+        {
+            var delta = sc.NewValue - sc.OldValue;
+            if (delta <= 0) continue;
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"    +{delta:0.#} {sc.Stat}");
+            Console.ResetColor();
+        }
+    }
+
+    private static void ShowLearnedAbilities(VictoryRewards rewards)
+    {
+        if (rewards.LearnedAbilities is not { Count: > 0 }) return;
+        Console.ForegroundColor = ConsoleColor.Magenta;
+        Console.WriteLine("  Learned Abilities:");
+        Console.ResetColor();
+        foreach (var a in rewards.LearnedAbilities)
+        {
+            Console.ForegroundColor = ConsoleColor.White;
+            Console.WriteLine($"    • {a}");
+            Console.ResetColor();
+        }
     }
 
     private void DisplayVictoryHeader()
@@ -235,128 +231,275 @@ public class VictoryScreen
         Console.WriteLine();
     }
 
-    private void AnimateExperienceGain(IActor actor, VictoryRewards rewards, int animationSpeedMs)
+    private void AnimateExperienceGain(IActor actor, VictoryRewards rewards, int animationSpeedMs, bool simple = false)
     {
-        var jobLevel = actor.JobSystem.GetJobLevel(actor.EffectiveClass);
-        var oldLevel = rewards.OldLevel;
-        var startXp = jobLevel.Experience - rewards.ExperienceGained;
+        if (simple)
+        {
+            Console.ForegroundColor = ConsoleColor.White;
+            Console.WriteLine("EXPERIENCE");
+            Console.ResetColor();
+            var jl = actor.JobSystem.GetJobLevel(actor.EffectiveClass);
+            var xpCurLevel = _xpCalculator.GetExperienceForLevel(jl.Level, LevelCurveType.Custom);
+            var xpNext = _xpCalculator.GetExperienceForLevel(jl.Level + 1, LevelCurveType.Custom);
+            var bar = new ExperienceBar(jl.Level, jl.Experience, xpCurLevel, xpNext);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write($"  Level {jl.Level}: ");
+            Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.Write(bar.GetBarString(40));
+            Console.ResetColor();
+            Console.WriteLine(" " + bar.GetProgressText());
+            if (rewards.NewLevel > rewards.OldLevel)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"  LEVEL UP! {rewards.OldLevel} → {rewards.NewLevel} (+{rewards.NewLevel - rewards.OldLevel}) - Resources Restored");
+                Console.ResetColor();
+            }
+            return;
+        }
+
+        var levelInfo = actor.JobSystem.GetJobLevel(actor.EffectiveClass);
+        int oldLevel = rewards.OldLevel;
+        int newLevel = rewards.NewLevel;
+        long xpGained = rewards.ExperienceGained;
+        long finalTotalXp = levelInfo.Experience; // cumulative xp after reward
+        long startTotalXp = finalTotalXp - xpGained;
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("═══ EXPERIENCE ═══");
+        Console.WriteLine("EXPERIENCE");
         Console.ResetColor();
         Console.WriteLine();
 
-        // Reserve a single row for the animated XP bar to avoid duplicate bars
-        int barRow = Console.CursorTop;
-        Console.WriteLine(); // blank line reserved; we'll overwrite this row each frame
+        // Precompute thresholds up to newLevel+1 (cumulative xp required to be that level)
+        var thresholds = new List<long>();
+        for (int lvl = 1; lvl <= Math.Max(1, newLevel) + 1; lvl++)
+            thresholds.Add(_xpCalculator.GetExperienceForLevel(lvl, LevelCurveType.Custom));
 
-        // Calculate XP thresholds
-        var xpForOldLevel = _xpCalculator.GetExperienceForLevel(oldLevel, Enums.LevelCurveType.Custom);
-        var xpForNextLevel = _xpCalculator.GetExperienceForLevel(oldLevel + 1, Enums.LevelCurveType.Custom);
-
-        // Create initial bar
-        var currentLevel = oldLevel;
-        
-        // Animate XP gain
-        int steps = (int)Math.Min(50, Math.Max(1, rewards.ExperienceGained)); // ensure at least 1 step and fit into int
-        var xpPerStep = rewards.ExperienceGained / (double)steps;
-        
-        for (int i = 0; i <= steps; i++)
+        // Guard when no XP gained
+        if (xpGained <= 0)
         {
-            var displayXp = (long)(startXp + (xpPerStep * i));
-            
-            // Check for level up
-            while (displayXp >= xpForNextLevel && currentLevel < rewards.NewLevel)
-            {
-                currentLevel++;
-                xpForOldLevel = _xpCalculator.GetExperienceForLevel(currentLevel, Enums.LevelCurveType.Custom);
-                xpForNextLevel = _xpCalculator.GetExperienceForLevel(currentLevel + 1, Enums.LevelCurveType.Custom);
-                
-                // Show level up animation
-                DisplayLevelUp(currentLevel);
-            }
-
-            // Update bar display on the reserved line
-            var bar = new ExperienceBar(currentLevel, displayXp, xpForOldLevel, xpForNextLevel);
-            DisplayExperienceBar(bar, i == steps, targetRow: barRow);
-            
-            if (i < steps)
-            {
-                Thread.Sleep(animationSpeedMs);
-            }
-        }
-
-        // Ensure cursor moves below the reserved bar after animation
-        try { Console.SetCursorPosition(0, barRow + 1); } catch { Console.WriteLine(); }
-        Console.WriteLine();
-    }
-
-    private void DisplayExperienceBar(ExperienceBar bar, bool isFinal, int? targetRow = null)
-    {
-        // Overwrite a specific target row if provided; otherwise clear current line
-        if (targetRow.HasValue)
-        {
-            try
-            {
-                int row = targetRow.Value;
-                int width = Math.Max(0, Console.WindowWidth - 1);
-                Console.SetCursorPosition(0, row);
-                Console.Write(new string(' ', width));
-                Console.SetCursorPosition(0, row);
-            }
-            catch
-            {
-                // Fallback
-                if (!isFinal) Console.Write('\r');
-            }
-        }
-        else
-        {
-            try
-            {
-                int row = Console.CursorTop;
-                int width = Math.Max(0, Console.WindowWidth - 1);
-                Console.SetCursorPosition(0, row);
-                Console.Write(new string(' ', width));
-                Console.SetCursorPosition(0, row);
-            }
-            catch
-            {
-                if (!isFinal) Console.Write('\r');
-            }
-        }
-
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write($"  Level {bar.CurrentLevel}: ");
-        Console.ResetColor();
-
-        // Draw bar
-        var barString = bar.GetBarString(40);
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.Write(barString);
-        Console.ResetColor();
-
-        // Show progress
-        Console.Write($" {bar.GetProgressText()}");
-
-        if (isFinal)
-        {
-            // Move cursor to next line so subsequent output is below the bar
+            long levelStartNoGain = thresholds[Math.Max(0, newLevel - 1)];
+            long levelNextNoGain = thresholds[Math.Max(0, newLevel)];
+            var barNoGain = new ExperienceBar(newLevel, finalTotalXp, levelStartNoGain, levelNextNoGain);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write($"  Level {newLevel}: ");
+            Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.Write(barNoGain.GetBarString(40));
+            Console.ResetColor();
+            Console.WriteLine(" " + barNoGain.GetProgressText());
             Console.WriteLine();
+            return;
         }
+
+        int levelsGained = Math.Max(0, newLevel - oldLevel);
+
+        // Reserve a block: K banners (3 lines each) + 1 line for bar
+        int startRow = Console.CursorTop;
+        int bannerLinesPer = 3;
+        int bannerCount = levelsGained;
+        int totalBannerLines = bannerCount * bannerLinesPer;
+        int barRow = startRow + totalBannerLines;
+        for (int i = 0; i < totalBannerLines + 1; i++) Console.WriteLine();
+        int continuationRow = barRow + 1; // where subsequent content should resume
+
+        // Detect cursor reposition capability
+        bool canReposition = true;
+        try { Console.SetCursorPosition(0, barRow); } catch { canReposition = false; }
+
+        // If we cannot reposition, avoid multi-frame output: show banners (if any) and print only the final bar once
+        if (!canReposition)
+        {
+            if (levelsGained > 0)
+            {
+                for (int lvl = oldLevel + 1; lvl <= newLevel; lvl++)
+                {
+                    DisplayLevelUp(lvl);
+                }
+            }
+
+            long finalLevelStart = thresholds[Math.Max(0, newLevel - 1)];
+            long finalLevelNext = thresholds[Math.Max(0, newLevel)];
+            var finalBar = new ExperienceBar(newLevel, finalTotalXp, finalLevelStart, finalLevelNext);
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write($"  Level {newLevel}: ");
+            Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.Write(finalBar.GetBarString(40));
+            Console.ResetColor();
+            Console.WriteLine(" " + finalBar.GetProgressText());
+            Console.WriteLine();
+            return;
+        }
+
+        // Helper: draw one frame at the reserved bar line
+        void DrawFrame(int level, long levelStart, long levelNext, long simulatedTotal)
+        {
+            var frameBar = new ExperienceBar(level, simulatedTotal, levelStart, levelNext);
+            try
+            {
+                Console.SetCursorPosition(0, barRow);
+                int clearWidth = Math.Max(0, Console.WindowWidth - 1);
+                Console.Write(new string(' ', clearWidth));
+                Console.SetCursorPosition(0, barRow);
+            }
+            catch
+            {
+                // If reposition fails mid-animation, abort and fall back to printing final bar once at current position
+                long finalLevelStart2 = thresholds[Math.Max(0, newLevel - 1)];
+                long finalLevelNext2 = thresholds[Math.Max(0, newLevel)];
+                var finalBar2 = new ExperienceBar(newLevel, finalTotalXp, finalLevelStart2, finalLevelNext2);
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.Write($"  Level {newLevel}: ");
+                Console.ResetColor();
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.Write(finalBar2.GetBarString(40));
+                Console.ResetColor();
+                Console.Write($" {finalBar2.GetProgressText()}\n");
+                throw; // rethrow to break animation loops
+            }
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.Write($"  Level {level}: ");
+            Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.Write(frameBar.GetBarString(40));
+            Console.ResetColor();
+            Console.Write($" {frameBar.GetProgressText()}");
+        }
+
+        // Helper: draw a level-up banner at a specific row (3 lines) without adding new lines
+        void DrawBannerAt(int topRow, int newLvl)
+        {
+            const string top = "╔═══════════════════════════════════════╗";
+            const string bottom = "╚═══════════════════════════════════════╝";
+            string mid = $"║   ⭐ LEVEL UP! → {newLvl,2} ⭐                ║";
+            if (mid.Length < top.Length) mid = mid.PadRight(top.Length - 1) + "║";
+            var blank = new string(' ', Math.Max(0, Console.WindowWidth - 1));
+
+            try
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                // Clear and draw top line
+                Console.SetCursorPosition(0, topRow);
+                Console.Write(blank);
+                Console.SetCursorPosition(0, topRow);
+                Console.Write(top);
+                // Clear and draw mid line
+                Console.SetCursorPosition(0, topRow + 1);
+                Console.Write(blank);
+                Console.SetCursorPosition(0, topRow + 1);
+                Console.Write(mid);
+                // Clear and draw bottom line
+                Console.SetCursorPosition(0, topRow + 2);
+                Console.Write(blank);
+                Console.SetCursorPosition(0, topRow + 2);
+                Console.Write(bottom);
+                Console.ResetColor();
+            }
+            catch
+            {
+                // If we cannot position reliably, fall back to printing banner normally (adds lines)
+                DisplayLevelUp(newLvl);
+            }
+        }
+
+        if (levelsGained == 0)
+        {
+            // Animate within the same level (no level up)
+            long levelStart = thresholds[Math.Max(0, newLevel - 1)];
+            long levelNext = thresholds[Math.Max(0, newLevel)];
+            long startInside = Math.Max(0, startTotalXp - levelStart);
+            long finalInside = Math.Max(0, finalTotalXp - levelStart);
+            long span = Math.Max(1, levelNext - levelStart);
+            long deltaInside = Math.Max(0, finalInside - startInside);
+
+            int steps = deltaInside <= 0 ? 1 : (int)Math.Clamp(deltaInside / Math.Max(1, span / 40.0), 15, 60);
+            double insidePerStep = steps <= 1 ? deltaInside : deltaInside / (double)steps;
+
+            try
+            {
+                for (int i = 0; i <= steps; i++)
+                {
+                    long inside = startInside + (long)Math.Round(insidePerStep * i);
+                    if (i == steps) inside = finalInside; // exact final
+                    long simulatedTotalXp = levelStart + inside;
+                    DrawFrame(newLevel, levelStart, levelNext, simulatedTotalXp);
+                    if (i < steps && animationSpeedMs > 0) Thread.Sleep(animationSpeedMs);
+                }
+            }
+            catch
+            {
+                // Already printed final bar in DrawFrame catch; ensure cursor moves below
+            }
+
+            try { Console.SetCursorPosition(0, continuationRow); } catch { }
+            Console.WriteLine();
+            return;
+        }
+
+        // Animate across level-ups: fill current level to threshold, show banner (in reserved space), then continue
+        int bannerIndex = 0;
+        for (int lvl = oldLevel; lvl <= newLevel; lvl++)
+        {
+            int idxStart = Math.Max(0, lvl - 1);
+            int idxNext = Math.Max(0, lvl);
+            long levelStart = thresholds[idxStart];
+            long levelNext = thresholds[Math.Min(idxNext, thresholds.Count - 1)];
+
+            long segStartInside = lvl == oldLevel ? Math.Max(0, startTotalXp - levelStart) : 0;
+            long segEndInside = lvl == newLevel ? Math.Max(0, finalTotalXp - levelStart) : Math.Max(0, levelNext - levelStart);
+
+            long span = Math.Max(1, levelNext - levelStart);
+            long deltaInside = Math.Max(0, segEndInside - segStartInside);
+            int steps = deltaInside <= 0 ? 1 : (int)Math.Clamp(deltaInside / Math.Max(1, span / 40.0), 15, 60);
+            double insidePerStep = steps <= 1 ? deltaInside : deltaInside / (double)steps;
+
+            try
+            {
+                for (int i = 0; i <= steps; i++)
+                {
+                    long inside = segStartInside + (long)Math.Round(insidePerStep * i);
+                    if (i == steps) inside = segEndInside; // exact final
+                    long simulatedTotalXp = levelStart + inside;
+                    DrawFrame(lvl, levelStart, levelNext, simulatedTotalXp);
+                    if (i < steps && animationSpeedMs > 0) Thread.Sleep(animationSpeedMs);
+                }
+            }
+            catch
+            {
+                // Final bar already printed in DrawFrame catch, break the animation
+                break;
+            }
+
+            // If we completed a level and there are more levels to go, draw the banner in the reserved area
+            if (lvl < newLevel)
+            {
+                int bannerTop = startRow + bannerIndex * bannerLinesPer;
+                DrawBannerAt(bannerTop, lvl + 1);
+                bannerIndex++;
+                if (animationSpeedMs > 0) Thread.Sleep(Math.Min(400, animationSpeedMs * 6));
+            }
+        }
+
+        // Move cursor below the reserved block for subsequent sections
+        try { Console.SetCursorPosition(0, continuationRow); } catch { }
+        Console.WriteLine();
     }
 
     private void DisplayLevelUp(int newLevel)
     {
-        Console.WriteLine();
-        Console.WriteLine();
+        // Compact banner (consistent width; no extra blank padding to prevent overlap)
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("╔═══════════════════════════════════════╗");
-        Console.WriteLine($"║        ⭐ LEVEL UP! → {newLevel,2}  ⭐        ║");
-        Console.WriteLine("╚═══════════════════════════════════════╝");
+        const string top = "╔═══════════════════════════════════════╗";
+        const string bottom = "╚═══════════════════════════════════════╝";
+        // Center content to approx width; keep fixed to avoid jitter
+        string mid = $"║   ⭐ LEVEL UP! → {newLevel,2} ⭐                ║";
+        if (mid.Length < top.Length) mid = mid.PadRight(top.Length - 1) + "║";
+        Console.WriteLine(top);
+        Console.WriteLine(mid);
+        Console.WriteLine(bottom);
         Console.ResetColor();
-        Console.WriteLine();
-        Thread.Sleep(800); // Pause on level up
     }
 
     private void DisplaySummary(VictoryRewards rewards)
@@ -383,19 +526,16 @@ public class VictoryScreen
         }
     }
 
-    private ConsoleColor GetRarityColor(IItem item)
+    private ConsoleColor GetRarityColor(IItem item) => item.Rarity switch
     {
-        return item.Rarity switch
-        {
-            Enums.RarityTier.Common => ConsoleColor.Gray,
-            Enums.RarityTier.Uncommon => ConsoleColor.Green,
-            Enums.RarityTier.Rare => ConsoleColor.Blue,
-            Enums.RarityTier.Epic => ConsoleColor.Magenta,
-            Enums.RarityTier.Legendary => ConsoleColor.Yellow,
-            Enums.RarityTier.Mythic => ConsoleColor.Red,
-            _ => ConsoleColor.White
-        };
-    }
+        RarityTier.Common => ConsoleColor.Gray,
+        RarityTier.Uncommon => ConsoleColor.Green,
+        RarityTier.Rare => ConsoleColor.Blue,
+        RarityTier.Epic => ConsoleColor.Magenta,
+        RarityTier.Legendary => ConsoleColor.Yellow,
+        RarityTier.Mythic => ConsoleColor.Red,
+        _ => ConsoleColor.White
+    };
 
     /// <summary>
     /// Quick victory display without animation (for testing)
@@ -424,8 +564,8 @@ public class VictoryScreen
         var bar = new ExperienceBar(
             jobLevel.Level,
             jobLevel.Experience,
-            _xpCalculator.GetExperienceForLevel(jobLevel.Level, Enums.LevelCurveType.Custom),
-            _xpCalculator.GetExperienceForLevel(jobLevel.Level + 1, Enums.LevelCurveType.Custom)
+            _xpCalculator.GetExperienceForLevel(jobLevel.Level, LevelCurveType.Custom),
+            _xpCalculator.GetExperienceForLevel(jobLevel.Level + 1, LevelCurveType.Custom)
         );
         
         Console.WriteLine($"\n{bar.GetBarString()} {bar.GetProgressText()}");

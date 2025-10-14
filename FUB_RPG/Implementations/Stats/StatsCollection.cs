@@ -50,6 +50,21 @@ public class StatsCollection : IHasStats
         }
     }
 
+    public void IncreaseBase(StatType type, double delta)
+    {
+        if (_stats.TryGetValue(type, out var sv))
+        {
+            sv.SetBase(sv.Base + delta);
+            Recalculate(type);
+        }
+        else
+        {
+            var created = new StatValue(type, delta);
+            _stats[type] = created;
+            Recalculate(type);
+        }
+    }
+
     public void AddModifier(StatModifier modifier)
     {
         if (!_modifiers.TryGetValue(modifier.Stat, out var list))

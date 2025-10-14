@@ -592,7 +592,27 @@ public sealed class GameLoop : IGameLoop
         // Compute total EXP from enemies
         long totalExp = enemyActors.Sum(e => (long)(50 * System.Math.Pow(e.Level, 1.5)));
 
-        // Build rewards per ally and apply experience
+        // NEW: Generate loot & gold based on enemies
+        var rng = new System.Random();
+        int totalGold = enemyActors.Sum(e => rng.Next(5, 10) * e.Level);
+        var droppedItems = new List<IItem>();
+        // Simple placeholder loot: one basic item per enemy chance
+        foreach (var enemy in enemyActors)
+        {
+            if (rng.NextDouble() < 0.5)
+            {
+                droppedItems.Add(new Fub.Implementations.Items.SimpleItem($"LootShard Lv{enemy.Level}", ItemType.Material, RarityTier.Common, stackable: true));
+            }
+        }
+        if (totalGold > 0) _state.Party.AddGold(totalGold);
+        if (droppedItems.Count > 0)
+        {
+            foreach (var it in droppedItems)
+            {
+                _state.Party.Leader.Inventory.TryAdd(it, 1);
+            }
+        }
+
         var xpCalculator = new Fub.Implementations.Progression.ExperienceCalculator();
         var victoryScreen = new Fub.Implementations.Combat.VictoryScreen(xpCalculator);
 
@@ -606,49 +626,58 @@ public sealed class GameLoop : IGameLoop
             // Capture pre-battle stat snapshot
             var preStats = ally.AllStats.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Modified);
 
-            // Capture pre-known abilities if the actor has an ability book
+            // Capture pre-known abilities
             HashSet<Guid> preAbilities = new();
+            List<string> learned = new();
             if (ally is Fub.Interfaces.Abilities.IHasAbilityBook hasBook)
             {
                 preAbilities = hasBook.AbilityBook.KnownAbilities.Select(a => a.Id).ToHashSet();
             }
 
-            // Apply EXP to the job system (this should update level/experience)
+            // Apply EXP
             ally.JobSystem.AddExperience(job, totalExp);
-
             int after = ally.JobSystem.GetJobLevel(job).Level;
-            int levelsGained = Math.Max(0, after - before);
+            int levelsGained = System.Math.Max(0, after - before);
 
-            // Compute stat changes (compare modified values)
+            // Apply stat growth & resource restoration
+            if (levelsGained > 0)
+            {
+                Fub.Implementations.Progression.ClassStatGrowth.ApplyGrowth(ally, before, after);
+            }
+
+            // Ability unlocks for newly reached levels
+            if (ally is Fub.Interfaces.Abilities.IHasAbilityBook hasBookAfter)
+            {
+                foreach (var unlock in Fub.Implementations.Abilities.ClassAbilityLearnset.GetUnlocks(job))
+                {
+                    if (unlock.Level > before && unlock.Level <= after)
+                    {
+                        var ability = unlock.Factory();
+                        if (hasBookAfter.AbilityBook.Learn(ability))
+                        {
+                            learned.Add(ability.Name);
+                        }
+                    }
+                }
+            }
+
+            // Compute stat changes post-growth
             var statChanges = new List<Fub.Implementations.Combat.VictoryStatChange>();
             foreach (var kv in ally.AllStats)
             {
                 var type = kv.Key;
                 var newVal = kv.Value.Modified;
                 preStats.TryGetValue(type, out var oldVal);
-                if (newVal != oldVal)
+                if (System.Math.Abs(newVal - oldVal) > 0.0001)
                 {
                     statChanges.Add(new Fub.Implementations.Combat.VictoryStatChange { Stat = type, OldValue = oldVal, NewValue = newVal });
-                }
-            }
-
-            // Compute newly learned abilities (difference between post and pre sets)
-            var learned = new List<string>();
-            if (ally is Fub.Interfaces.Abilities.IHasAbilityBook hasBookAfter)
-            {
-                foreach (var abil in hasBookAfter.AbilityBook.KnownAbilities)
-                {
-                    if (!preAbilities.Contains(abil.Id))
-                    {
-                        learned.Add(abil.Name);
-                    }
                 }
             }
 
             var rewards = new Fub.Implementations.Combat.VictoryRewards
             {
                 ExperienceGained = totalExp,
-                GoldGained = 0,
+                GoldGained = 0, // set on first reward only below
                 ItemsDropped = new List<IItem>(),
                 OldLevel = before,
                 NewLevel = after,
@@ -659,7 +688,14 @@ public sealed class GameLoop : IGameLoop
             rewardsList.Add(rewards);
         }
 
-        // Show a single consolidated victory screen for the whole party
+        // Assign shared loot/gold to first reward for aggregation
+        if (rewardsList.Count > 0)
+        {
+            rewardsList[0].GoldGained = totalGold;
+            rewardsList[0].ItemsDropped = droppedItems;
+        }
+
+        // Show party victory
         victoryScreen.DisplayPartyVictory(_state.Party.Members.ToList(), rewardsList, animationSpeedMs: 30);
 
         // After showing party victory, mark UI for refresh and log victory

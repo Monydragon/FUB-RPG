@@ -177,4 +177,22 @@ public abstract class ActorBase : EntityBase, IActor, IHasAbilityBook
         sv.ApplyDelta(-amount);
         return true;
     }
+
+    public void IncreaseBaseStat(StatType stat, double delta)
+    {
+        if (delta == 0) return;
+        StatsInternal.IncreaseBase(stat, delta);
+    }
+
+    public void RestoreResourceStats()
+    {
+        foreach (var kv in StatsInternal.AllStats)
+        {
+            var sv = (StatValue)kv.Value;
+            if (kv.Key is StatType.Health or StatType.Mana or StatType.Technical)
+            {
+                sv.SetCurrentToMax();
+            }
+        }
+    }
 }
