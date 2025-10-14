@@ -27,6 +27,7 @@ using Fub.Interfaces.Config;
 using Fub.Implementations.Config;
 using Fub.Interfaces.Items;
 using Fub.Implementations.Items;
+using Fub.Implementations.Random; // added
 
 namespace Fub.Implementations.Game;
 
@@ -53,6 +54,9 @@ public sealed class GameLoop : IGameLoop
     // Simple enemy respawn tracking per map
     private readonly Dictionary<Guid, int> _mapStepCounters = new();
     // private const int RespawnIntervalSteps = 30; // replaced by config
+
+    // Living world manager for moving NPCs/enemies
+    private LivingWorldManager? _worldManager;
 
     // Viewport config moved to _config
     // private const int MaxViewportWidth = 80;
@@ -151,6 +155,10 @@ public sealed class GameLoop : IGameLoop
 
         // Populate starting city (safe zone)
         PopulateMap(startCity, 0, 4, 4);
+
+        // Initialize living world manager for NPC/enemy movement
+        _worldManager = new LivingWorldManager(startCity, _state.Party, new RandomSource(world.Seed), _state.Difficulty);
+        _worldManager.EnsureMovementControllersForExistingEntities();
 
         _state.SetPhase(GamePhase.Exploring);
     }
@@ -252,6 +260,12 @@ public sealed class GameLoop : IGameLoop
 
         if (moved)
         {
+            // Increment global steps
+            _state.IncrementSteps();
+
+            // Update living world (move NPCs/enemies and AI)
+            _worldManager?.Update(0.5f);
+
             CheckForAutoInteractions(map);
             RegeneratePartyResources(_config.RegenMpPercentPerStep, _config.RegenTpPercentPerStep);
             TrackStepAndMaybeRespawn(map);
@@ -555,7 +569,36 @@ public sealed class GameLoop : IGameLoop
     private void EngageCombat(IMap map, List<IMapObject> enemies)
     {
         if (enemies.Count == 0) return;
-        var enemyActors = enemies.Where(e => e.Actor != null).Select(e => e.Actor!).ToList();
+
+        // Build encounter group based on difficulty and party size
+        var rng = new System.Random();
+        int desired = EnemyScaler.GetEnemyCount(_state.Party.Members.Count, _state.Difficulty, rng);
+
+        // Gather enemies on current cell and adjacent cells until reaching desired count
+        var leader = _state.Party.Leader;
+        var encounterObjects = new List<IMapObject>();
+        encounterObjects.AddRange(enemies);
+        if (encounterObjects.Count < desired)
+        {
+            var neighbors = new List<(int x,int y)>
+            {
+                (leader.X+1, leader.Y), (leader.X-1, leader.Y), (leader.X, leader.Y+1), (leader.X, leader.Y-1),
+                (leader.X+1, leader.Y+1), (leader.X-1, leader.Y-1), (leader.X+1, leader.Y-1), (leader.X-1, leader.Y+1)
+            };
+            foreach (var (nx, ny) in neighbors)
+            {
+                if (!map.InBounds(nx, ny)) continue;
+                var at = map.GetObjectsAt(nx, ny).Where(o => o.ObjectKind == MapObjectKind.Enemy).ToList();
+                foreach (var o in at)
+                {
+                    if (encounterObjects.Count >= desired) break;
+                    if (!encounterObjects.Any(e => e.Id == o.Id)) encounterObjects.Add(o);
+                }
+                if (encounterObjects.Count >= desired) break;
+            }
+        }
+
+        var enemyActors = encounterObjects.Where(e => e.Actor != null).Select(e => e.Actor!).ToList();
 
         // Capture pre-combat levels per ally
         var preLevels = _state.Party.Members.ToDictionary(a => a.Id, a => a.JobSystem.GetJobLevel(a.EffectiveClass).Level);
@@ -577,7 +620,7 @@ public sealed class GameLoop : IGameLoop
             ShowVictoryResults(session, enemyActors, preLevels);
 
             // Remove defeated enemies from the map
-            foreach (var enemy in enemies) map.RemoveObject(enemy.Id);
+            foreach (var enemy in encounterObjects) map.RemoveObject(enemy.Id);
             AddLog("Victory!");
         }
         else if (session.Outcome == CombatOutcome.Defeat)
@@ -1164,6 +1207,11 @@ public sealed class GameLoop : IGameLoop
             member.SetMovementValidator((x, y) => destMap.InBounds(x, y) && destMap.GetTile(x, y).TileType == MapTileType.Floor);
         
         PopulateMap(destMap, 0, 2, 3);
+
+        // Initialize/refresh world manager for the new map
+        _worldManager = new LivingWorldManager(destMap, _state.Party, new RandomSource(_state.CurrentWorld.Seed ^ destMap.Id.GetHashCode()), _state.Difficulty);
+        _worldManager.EnsureMovementControllersForExistingEntities();
+
         _uiInitialized = false;
     }
 
@@ -1216,9 +1264,9 @@ public sealed class GameLoop : IGameLoop
         // Spacer
         AnsiConsole.WriteLine();
 
-        // PARTY INFO: Enhanced display with leader indicator
+        // PARTY INFO: Enhanced display with leader indicator + gold and steps
         var leaderIcon = "\u2605"; // Star symbol for leader
-        var partyHeader = $"[bold cyan]Party[/] [grey]|[/] [yellow]Leader: {leaderIcon} {leader.Name}[/] [grey]|[/] [green]Members: {_state.Party.Members.Count}/{_state.Party.MaxSize}[/]";
+        var partyHeader = $"[bold cyan]Party[/] [grey]|[/] [yellow]Leader: {leaderIcon} {leader.Name}[/] [grey]|[/] [green]Members: {_state.Party.Members.Count}/{_state.Party.MaxSize}[/] [grey]|[/] [gold1]Gold: {_state.Party.Gold}g[/] [grey]|[/] [cyan]Steps: {_state.Steps}[/]";
         AnsiConsole.Write(new Rule(partyHeader).RuleStyle("grey"));
 
         // Render party horizontally using Panels within Columns

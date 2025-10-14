@@ -24,10 +24,12 @@ public class EnemyScaler
         var levelDiff = targetLevel - currentLevel;
         var scaleFactor = 1.0 + (levelDiff * 0.1); // 10% increase per level
 
-        // Apply difficulty multipliers
+        // Apply difficulty multipliers (cover all enum values)
         var difficultyMultiplier = difficulty switch
         {
             Difficulty.Story => 0.75,
+            Difficulty.VeryEasy => 0.85,
+            Difficulty.Easy => 0.9,
             Difficulty.Normal => 1.0,
             Difficulty.Hard => 1.35,
             Difficulty.Ultra => 1.75,
@@ -40,7 +42,7 @@ public class EnemyScaler
         // Elite and Boss modifiers
         if (enemy.IsElite)
             scaleFactor *= 1.5;
-        if (enemy.IsBoss)
+        if (enemy.IsBoss) 
             scaleFactor *= 2.5;
 
         // Scale primary stats
@@ -70,10 +72,12 @@ public class EnemyScaler
             _ => 3
         };
 
-        // Difficulty adjustment
+        // Difficulty adjustment (cover all enum values)
         var difficultyBonus = difficulty switch
         {
-            Difficulty.Story => -2,
+            Difficulty.Story => -3,
+            Difficulty.VeryEasy => -2,
+            Difficulty.Easy => -1,
             Difficulty.Normal => 0,
             Difficulty.Hard => 2,
             Difficulty.Ultra => 4,
@@ -120,6 +124,35 @@ public class EnemyScaler
             if (roll < 0.5) return 3;
             return 4;
         }
+    }
+
+    /// <summary>
+    /// Difficulty-aware count: start from party-size based count and with a difficulty-based probability add +1 (up to caps)
+    /// </summary>
+    public static int GetEnemyCount(int partySize, Difficulty difficulty, System.Random random)
+    {
+        int baseCount = GetEnemyCount(partySize, random);
+
+        // Max enemies cap by party size
+        int cap = partySize <= 1 ? 2 : 4;
+
+        // Chance for +1 enemy increases with difficulty
+        double plusOneChance = difficulty switch
+        {
+            Difficulty.Story => 0.0,
+            Difficulty.VeryEasy => 0.10,
+            Difficulty.Easy => 0.20,
+            Difficulty.Normal => 0.30,
+            Difficulty.Hard => 0.50,
+            Difficulty.Ultra => 0.70,
+            Difficulty.Nightmare => 0.85,
+            _ => 0.30
+        };
+
+        if (baseCount < cap && random.NextDouble() < plusOneChance)
+            baseCount++;
+
+        return Math.Min(baseCount, cap);
     }
 
     private static void ScaleStat(IActor actor, StatType statType, double scaleFactor)

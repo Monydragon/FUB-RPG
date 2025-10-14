@@ -25,6 +25,9 @@ public sealed class GameState : IGameState
     // New: Combat log visibility toggle
     public bool ShowCombatLog { get; private set; } = true;
 
+    // New: Track steps taken while exploring
+    public int Steps { get; private set; }
+
     public GameState(IParty party)
     {
         Party = party;
@@ -39,4 +42,7 @@ public sealed class GameState : IGameState
     public void SetDifficulty(Difficulty difficulty) => Difficulty = difficulty;
     public void SetCombatSpeed(CombatSpeed speed) => CombatSpeed = speed;
     public void SetShowCombatLog(bool visible) => ShowCombatLog = visible;
+
+    // New: increment steps counter
+    public void IncrementSteps() => Steps++;
 }

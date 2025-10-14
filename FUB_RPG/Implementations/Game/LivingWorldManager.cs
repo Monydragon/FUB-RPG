@@ -44,6 +44,9 @@ public class LivingWorldManager
     {
         _accumulatedTime += deltaTime;
 
+        // Ensure controllers exist for any new entities
+        EnsureMovementControllersForExistingEntities();
+
         // Update movement controllers
         _spawnManager.UpdateMovement(deltaTime);
 
@@ -57,6 +60,35 @@ public class LivingWorldManager
             UpdateChaseTargets();
             
             _accumulatedTime = 0;
+        }
+    }
+
+    /// <summary>
+    /// Scan the map and attach movement controllers to any enemies/NPCs missing one.
+    /// </summary>
+    public void EnsureMovementControllersForExistingEntities()
+    {
+        var withControllers = _spawnManager.GetMovingActors().Select(t => t.actor.Id).ToHashSet();
+
+        foreach (var obj in _map.Objects)
+        {
+            if (obj.Actor == null) continue;
+            if (withControllers.Contains(obj.Actor.Id)) continue;
+
+            if (obj.Actor is IMonster)
+            {
+                // Enemies roam by default
+                int radius = _random.NextInt(3, 8);
+                _spawnManager.CreateMovementController(obj.Actor, MovementBehavior.Roaming, radius);
+            }
+            else if (obj.Actor is INpc)
+            {
+                // NPCs roam in towns, otherwise occasionally roam
+                var behavior = _map.Kind == MapKind.Town ? MovementBehavior.Roaming : (_random.NextDouble() < 0.5 ? MovementBehavior.Roaming : MovementBehavior.Stationary);
+                int radius = _map.Kind == MapKind.Town ? _random.NextInt(3, 7) : _random.NextInt(2, 5);
+                if (behavior == MovementBehavior.Roaming)
+                    _spawnManager.CreateMovementController(obj.Actor, behavior, radius);
+            }
         }
     }
 
