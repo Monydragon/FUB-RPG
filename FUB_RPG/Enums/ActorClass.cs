@@ -21,6 +21,7 @@ public enum ActorClass
 
     // Combat - Ranged
     Ranger,         // D&D
+    Hunter,         // D&D
     Machinist,      // FFXIV (gunner archetype)
     Dancer,         // FFXIV
     Bard,           // D&D/FFXIV
@@ -54,5 +55,5 @@ public enum ActorClass
     // Gathering (Disciples of the Land)
     Miner,
     Botanist,
-    Fisher
+    Fisher,
 }

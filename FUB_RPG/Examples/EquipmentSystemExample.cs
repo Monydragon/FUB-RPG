@@ -14,7 +14,7 @@ using Fub.Interfaces.Actors;
 namespace Fub.Examples;
 
 /// <summary>
-/// Demonstrates the complete tier-based equipment and loot system
+/// Demonstrates the complete tier-based equipment and loot system with expanded consumables
 /// Shows how every class gets appropriate equipment for each 10-level tier
 /// </summary>
 public class EquipmentSystemExample
@@ -39,7 +39,7 @@ public class EquipmentSystemExample
     }
 
     /// <summary>
-    /// Demonstrates generating complete equipment sets for all classes across all tiers (1-100)
+    /// Demonstrates generating complete equipment sets for all classes across all 10 tiers (1-100)
     /// </summary>
     public void DemonstrateClassEquipmentGeneration()
     {
@@ -185,11 +185,358 @@ public class EquipmentSystemExample
         }
     }
 
+    /// <summary>
+    /// Demonstrates the expanded consumable item system
+    /// </summary>
+    public void DemonstrateConsumableItems()
+    {
+        Console.WriteLine("=== CONSUMABLE ITEMS CATALOG ===");
+        Console.WriteLine();
+
+        var consumables = ItemCatalog.GetAllConsumables();
+        
+        Console.WriteLine($"Total Consumables: {consumables.Count}");
+        Console.WriteLine();
+
+        // Group by rarity
+        var grouped = consumables.GroupBy(i => i.Rarity).OrderBy(g => g.Key);
+        
+        foreach (var group in grouped)
+        {
+            Console.WriteLine($"--- {group.Key} Consumables ({group.Count()} items) ---");
+            foreach (var item in group)
+            {
+                Console.WriteLine($"  • {item.Name}");
+                if (item is ConsumableItem consumable)
+                {
+                    Console.WriteLine($"    {consumable.Description}");
+                    Console.WriteLine($"    Stack: {item.MaxStackSize} | Value: {item.BaseValue:N0}g | Weight: {item.Weight:F1} lbs");
+                }
+                else
+                {
+                    Console.WriteLine($"    {item.Description}");
+                    Console.WriteLine($"    Stack: {item.MaxStackSize} | Value: {item.BaseValue:N0}g | Weight: {item.Weight:F1} lbs");
+                }
+                Console.WriteLine();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Demonstrates key items and quest items
+    /// </summary>
+    public void DemonstrateKeyItems()
+    {
+        Console.WriteLine("=== KEY ITEMS & QUEST ITEMS ===");
+        Console.WriteLine();
+
+        var keyItems = ItemCatalog.GetAllKeyItems();
+        
+        Console.WriteLine($"Total Key Items: {keyItems.Count}");
+        Console.WriteLine();
+
+        foreach (var item in keyItems)
+        {
+            Console.WriteLine($"• {item.Name} ({item.Rarity})");
+            Console.WriteLine($"  {item.Description}");
+            Console.WriteLine($"  Value: {item.BaseValue:N0}g | Weight: {item.Weight:F1} lbs");
+            Console.WriteLine();
+        }
+    }
+
+    /// <summary>
+    /// Demonstrates crafting materials
+    /// </summary>
+    public void DemonstrateCraftingMaterials()
+    {
+        Console.WriteLine("=== CRAFTING MATERIALS ===");
+        Console.WriteLine();
+
+        var materials = ItemCatalog.GetAllMaterials();
+        
+        Console.WriteLine($"Total Materials: {materials.Count}");
+        Console.WriteLine();
+
+        // Group by rarity
+        var grouped = materials.GroupBy(i => i.Rarity).OrderBy(g => g.Key);
+        
+        foreach (var group in grouped)
+        {
+            Console.WriteLine($"--- {group.Key} Materials ({group.Count()} items) ---");
+            foreach (var item in group)
+            {
+                Console.WriteLine($"  • {item.Name}");
+                Console.WriteLine($"    {item.Description}");
+                Console.WriteLine($"    Stack: {item.MaxStackSize} | Value: {item.BaseValue:N0}g | Weight: {item.Weight:F1} lbs");
+                Console.WriteLine();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Demonstrates a sample inventory with various items
+    /// </summary>
+    public void DemonstrateSampleInventory()
+    {
+        Console.WriteLine("=== SAMPLE INVENTORY ===");
+        Console.WriteLine("Showing a typical adventurer's inventory:");
+        Console.WriteLine();
+
+        var inventory = new List<ItemStack>
+        {
+            new ItemStack(ItemCatalog.GetAllConsumables().First(i => i.Name == "HP Potion"), 15),
+            new ItemStack(ItemCatalog.GetAllConsumables().First(i => i.Name == "MP Potion"), 10),
+            new ItemStack(ItemCatalog.GetAllConsumables().First(i => i.Name == "TP Potion"), 8),
+            new ItemStack(ItemCatalog.GetAllConsumables().First(i => i.Name == "Elixir"), 2),
+            new ItemStack(ItemCatalog.GetAllConsumables().First(i => i.Name == "Smelling Salts"), 20),
+            new ItemStack(ItemCatalog.GetAllConsumables().First(i => i.Name == "Antidote"), 15),
+            new ItemStack(ItemCatalog.GetAllConsumables().First(i => i.Name == "Phoenix Down"), 3),
+            new ItemStack(ItemCatalog.GetAllKeyItems().First(i => i.Name == "Iron Key"), 1),
+            new ItemStack(ItemCatalog.GetAllMaterials().First(i => i.Name == "Iron Ore"), 25),
+            new ItemStack(ItemCatalog.GetAllMaterials().First(i => i.Name == "Magic Crystal"), 12),
+            new ItemStack(ItemCatalog.GetAllMaterials().First(i => i.Name == "Healing Herb"), 30)
+        };
+
+        decimal totalValue = 0;
+        float totalWeight = 0;
+
+        foreach (var stack in inventory)
+        {
+            Console.WriteLine($"• {stack}");
+            totalValue += stack.TotalValue;
+            totalWeight += stack.Item.Weight * stack.Quantity;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"Total Items: {inventory.Count} stacks ({inventory.Sum(s => s.Quantity)} individual items)");
+        Console.WriteLine($"Total Value: {totalValue:N0} gold");
+        Console.WriteLine($"Total Weight: {totalWeight:F1} lbs");
+    }
+
+    /// <summary>
+    /// Demonstrates loot drops with the new items
+    /// </summary>
+    public void DemonstrateEnhancedLootDrops()
+    {
+        Console.WriteLine("=== ENHANCED LOOT DROPS ===");
+        Console.WriteLine();
+
+        // Different enemy types with different loot tables
+        var scenarios = new[]
+        {
+            ("Common Slime", 5, new[] { "Minor HP Potion", "Slime Gel", "Healing Herb" }),
+            ("Forest Wolf Pack", 12, new[] { "HP Potion", "Wolf Pelt", "Antidote", "TP Potion" }),
+            ("Treasure Goblin", 18, new[] { "Gold Ore", "Silver Ore", "Iron Key", "Magic Crystal" }),
+            ("Elite Dragon", 50, new[] { "Megalixir", "Dragon Scale", "Phoenix Down", "Mithril Ore", "Elixir" }),
+            ("Legendary Boss", 75, new[] { "Ultra HP Potion", "Adamantite Ore", "Phoenix Feather", "Mega Phoenix", "Hero's Elixir" })
+        };
+
+        foreach (var (enemyName, level, possibleDrops) in scenarios)
+        {
+            Console.WriteLine($"--- {enemyName} (Level {level}) ---");
+            var lootDrop = CreateEnhancedLootDrop(enemyName, level, possibleDrops);
+            
+            Console.WriteLine($"Gold: {lootDrop.GoldGained:N0}");
+            Console.WriteLine($"Experience: {lootDrop.ExperienceGained:N0}");
+            Console.WriteLine("Items:");
+            
+            foreach (var stack in lootDrop.Items)
+            {
+                Console.WriteLine($"  • {stack}");
+            }
+            Console.WriteLine();
+        }
+    }
+
+    /// <summary>
+    /// Demonstrates all weapons in the catalog
+    /// </summary>
+    public void DemonstrateWeaponsCatalog()
+    {
+        Console.WriteLine("=== WEAPONS CATALOG ===");
+        Console.WriteLine();
+
+        var allWeapons = ItemCatalog.GetAllWeapons();
+        
+        Console.WriteLine($"Total Weapons: {allWeapons.Count}");
+        Console.WriteLine($"(41 weapon types × 10 tiers = 410+ unique weapons)");
+        Console.WriteLine();
+
+        // Show weapons by tier
+        var tiers = System.Enum.GetValues<EquipmentTier>();
+        foreach (var tier in tiers)
+        {
+            var tierWeapons = ItemCatalog.GetWeaponsByTier(tier);
+            Console.WriteLine($"--- {tier} Tier ({tierWeapons.Count} weapons) ---");
+            Console.WriteLine($"Level Requirement: {((int)tier - 1) * 10 + 1}+");
+            Console.WriteLine($"Rarity: {ItemCatalog.GetRarityForTier(tier)}");
+            Console.WriteLine();
+        }
+    }
+
+    /// <summary>
+    /// Demonstrates weapons for specific classes
+    /// </summary>
+    public void DemonstrateClassSpecificWeapons(ActorClass actorClass)
+    {
+        Console.WriteLine($"=== {actorClass.ToString().ToUpper()} WEAPONS ===");
+        Console.WriteLine();
+
+        // Find the weapon type for this class
+        var weaponType = GetWeaponTypeForClass(actorClass);
+        var weapons = ItemCatalog.GetWeaponsByType(weaponType);
+
+        Console.WriteLine($"Weapon Type: {weaponType}");
+        Console.WriteLine($"Total Variants: {weapons.Count}");
+        Console.WriteLine();
+
+        foreach (var item in weapons)
+        {
+            if (item is Weapon weapon)
+            {
+                Console.WriteLine($"• {weapon.Name} (Level {weapon.RequiredLevel})");
+                Console.WriteLine($"  Damage: {weapon.MinDamage:F1}-{weapon.MaxDamage:F1} | Speed: {weapon.Speed:F2}");
+                Console.WriteLine($"  Value: {weapon.BaseValue:N0}g | Weight: {weapon.Weight:F1} lbs | Rarity: {weapon.Rarity}");
+                Console.WriteLine();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Demonstrates weapon progression for a specific type
+    /// </summary>
+    public void DemonstrateWeaponProgression()
+    {
+        Console.WriteLine("=== WEAPON PROGRESSION EXAMPLES ===");
+        Console.WriteLine();
+
+        var exampleTypes = new[]
+        {
+            WeaponType.Sword,
+            WeaponType.Bow,
+            WeaponType.Staff,
+            WeaponType.Katana,
+            WeaponType.Grimoire
+        };
+
+        foreach (var weaponType in exampleTypes)
+        {
+            Console.WriteLine($"--- {weaponType} Progression ---");
+            var weapons = ItemCatalog.GetWeaponsByType(weaponType);
+            
+            foreach (var item in weapons)
+            {
+                if (item is Weapon weapon)
+                {
+                    Console.WriteLine($"Level {weapon.RequiredLevel,3}: {weapon.Name,-25} " +
+                                    $"DMG {weapon.MinDamage,4:F0}-{weapon.MaxDamage,4:F0} " +
+                                    $"Speed {weapon.Speed:F2} " +
+                                    $"({weapon.Rarity})");
+                }
+            }
+            Console.WriteLine();
+        }
+    }
+
+    /// <summary>
+    /// Demonstrates comparing weapons across tiers
+    /// </summary>
+    public void DemonstrateWeaponComparison()
+    {
+        Console.WriteLine("=== WEAPON TIER COMPARISON ===");
+        Console.WriteLine();
+
+        var weaponType = WeaponType.Sword;
+        Console.WriteLine($"Comparing all {weaponType} tiers:");
+        Console.WriteLine();
+
+        var weapons = ItemCatalog.GetWeaponsByType(weaponType);
+        
+        Console.WriteLine($"{"Tier",-15} {"Level",-8} {"Damage Range",-20} {"Value",-15} {"Rarity",-12}");
+        Console.WriteLine(new string('-', 75));
+
+        foreach (var item in weapons)
+        {
+            if (item is Weapon weapon)
+            {
+                var damageRange = $"{weapon.MinDamage:F0}-{weapon.MaxDamage:F0}";
+                Console.WriteLine($"{weapon.Tier,-15} {weapon.RequiredLevel,-8} {damageRange,-20} {weapon.BaseValue + "g",-15} {weapon.Rarity,-12}");
+            }
+        }
+    }
+
+    private WeaponType GetWeaponTypeForClass(ActorClass actorClass)
+    {
+        return actorClass switch
+        {
+            ActorClass.Adventurer => WeaponType.Toolkit,
+            ActorClass.Warrior => WeaponType.Sword,
+            ActorClass.Cleric => WeaponType.Mace,
+            ActorClass.Paladin => WeaponType.HolySword,
+            ActorClass.DarkKnight => WeaponType.Greatsword,
+            ActorClass.Gunbreaker => WeaponType.Gunblade,
+            ActorClass.Barbarian => WeaponType.Greataxe,
+            ActorClass.Monk => WeaponType.Handwraps,
+            ActorClass.Samurai => WeaponType.Katana,
+            ActorClass.Dragoon => WeaponType.Spear,
+            ActorClass.Ninja => WeaponType.Kunai,
+            ActorClass.Reaper => WeaponType.Scythe,
+            ActorClass.Rogue => WeaponType.Dagger,
+            ActorClass.Druid => WeaponType.Scimitar,
+            ActorClass.Ranger => WeaponType.Bow,
+            ActorClass.Hunter => WeaponType.Crossbow,
+            ActorClass.Machinist => WeaponType.Firearm,
+            ActorClass.Dancer => WeaponType.Chakrams,
+            ActorClass.Bard => WeaponType.Lute,
+            ActorClass.Wizard => WeaponType.Wand,
+            ActorClass.Sorcerer => WeaponType.Orb,
+            ActorClass.Warlock => WeaponType.PactTome,
+            ActorClass.BlackMage => WeaponType.Rod,
+            ActorClass.WhiteMage => WeaponType.Staff,
+            ActorClass.RedMage => WeaponType.Rapier,
+            ActorClass.BlueMage => WeaponType.Cane,
+            ActorClass.Summoner => WeaponType.Grimoire,
+            ActorClass.Scholar => WeaponType.Codex,
+            ActorClass.Astrologian => WeaponType.Astrolabe,
+            ActorClass.Sage => WeaponType.Nouliths,
+            ActorClass.Necromancer => WeaponType.Focus,
+            ActorClass.Artificer => WeaponType.MultiTool,
+            ActorClass.Carpenter => WeaponType.Saw,
+            ActorClass.Blacksmith => WeaponType.Hammer,
+            ActorClass.Armorer => WeaponType.RaisingHammer,
+            ActorClass.Goldsmith => WeaponType.ChasingHammer,
+            ActorClass.Leatherworker => WeaponType.HeadKnife,
+            ActorClass.Weaver => WeaponType.Needle,
+            _ => WeaponType.Sword
+        };
+    }
+
     private void InitializeItemDatabase()
     {
-        // Add sample items to the loot generator's database
-        var sampleItems = CreateSampleItems();
-        foreach (var item in sampleItems)
+        // Add all consumables to the loot generator's database
+        var allConsumables = ItemCatalog.GetAllConsumables();
+        foreach (var item in allConsumables)
+        {
+            _lootGenerator.AddItemToDatabase(item.Name, item);
+        }
+
+        // Add all materials
+        var allMaterials = ItemCatalog.GetAllMaterials();
+        foreach (var item in allMaterials)
+        {
+            _lootGenerator.AddItemToDatabase(item.Name, item);
+        }
+
+        // Add all key items
+        var allKeyItems = ItemCatalog.GetAllKeyItems();
+        foreach (var item in allKeyItems)
+        {
+            _lootGenerator.AddItemToDatabase(item.Name, item);
+        }
+
+        // Add all weapons
+        var allWeapons = ItemCatalog.GetAllWeapons();
+        foreach (var item in allWeapons)
         {
             _lootGenerator.AddItemToDatabase(item.Name, item);
         }
@@ -289,28 +636,90 @@ public class EquipmentSystemExample
 
     private List<SimpleItem> CreateSampleItems()
     {
-        return new List<SimpleItem>
+        // Return items from catalog instead of creating new ones
+        var items = new List<SimpleItem>();
+        
+        // Get a selection of items from the catalog
+        var consumables = ItemCatalog.GetAllConsumables().Take(6).OfType<SimpleItem>();
+        items.AddRange(consumables);
+        
+        return items;
+    }
+
+    private LootDrop CreateEnhancedLootDrop(string source, int level, string[] possibleItems)
+    {
+        var loot = new LootDrop { Source = source };
+        
+        // Scale gold and experience with level
+        var goldAmount = (decimal)(_random.NextInt(10, 50) * level);
+        var experience = _random.NextInt(20, 100) * level;
+        
+        loot.AddGold(goldAmount);
+        loot.AddExperience(experience);
+        
+        // Add random items from possible drops
+        var itemCount = _random.NextInt(1, Math.Min(possibleItems.Length + 1, 5));
+        var selectedItems = possibleItems.OrderBy(_ => _random.NextDouble()).Take(itemCount);
+        
+        foreach (var itemName in selectedItems)
         {
-            CreateSampleItem("Health Potion", ItemType.Consumable, true, 50, 10m, 0.2f),
-            CreateSampleItem("Mana Potion", ItemType.Consumable, true, 50, 12m, 0.2f),
-            CreateSampleItem("Iron Ore", ItemType.Material, true, 99, 5m, 1.0f),
-            CreateSampleItem("Magic Crystal", ItemType.Material, true, 20, 25m, 0.1f),
-            CreateSampleItem("Ancient Scroll", ItemType.Consumable, false, 1, 100m, 0.1f),
-            CreateSampleItem("Gold Coin", ItemType.Currency, true, 1000, 1m, 0.01f)
-        };
+            var item = _lootGenerator.GetItemFromDatabase(itemName);
+            if (item != null)
+            {
+                var quantity = item.Stackable ? _random.NextInt(1, Math.Min(6, item.MaxStackSize / 10 + 1)) : 1;
+                loot.AddItem(item, quantity);
+            }
+        }
+        
+        return loot;
     }
 
     private SimpleItem CreateSampleItem(string name, ItemType type, bool stackable, int maxStack, decimal value = 10m, float weight = 1f)
     {
-        return new SimpleItem(name, type, RarityTier.Common, stackable, maxStack, value, weight);
+        return new SimpleItem(name, type, RarityTier.Common, stackable, maxStack, value, weight, $"A sample {type} item.");
     }
 
+    /// <summary>
+    /// Runs all demonstrations in sequence with pauses between each
+    /// </summary>
     public void RunAllDemonstrations()
     {
         DemonstrateTierLevelSystem();
         Console.WriteLine();
         
+        Console.WriteLine("Press any key to view consumable items...");
+        Console.ReadKey();
+        Console.Clear();
+        
+        DemonstrateConsumableItems();
+        
+        Console.WriteLine("Press any key to view key items...");
+        Console.ReadKey();
+        Console.Clear();
+        
+        DemonstrateKeyItems();
+        
+        Console.WriteLine("Press any key to view crafting materials...");
+        Console.ReadKey();
+        Console.Clear();
+        
+        DemonstrateCraftingMaterials();
+        
+        Console.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+        Console.Clear();
+        
         DemonstrateItemStacking();
+        Console.WriteLine();
+        
+        DemonstrateSampleInventory();
+        Console.WriteLine();
+        
+        Console.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+        Console.Clear();
+        
+        DemonstrateEnhancedLootDrops();
         Console.WriteLine();
         
         DemonstrateChestSystem();
