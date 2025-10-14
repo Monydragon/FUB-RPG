@@ -5,13 +5,21 @@ namespace Fub.Implementations.Items;
 
 public sealed class SimpleItem : ItemBase
 {
-    public SimpleItem(string name, string? description = null, RarityTier rarity = RarityTier.Common, bool stackable = false, int maxStack = 1, decimal baseValue = 0m, float weight = 0f)
-        : base(name, ItemType.Generic, rarity)
+    public SimpleItem(
+        string name, 
+        ItemType itemType, 
+        RarityTier rarity, 
+        bool stackable = false, 
+        int maxStackSize = 1, 
+        decimal baseValue = 0m, 
+        float weight = 1f,
+        string? description = null) 
+        : base(name, itemType, rarity)
     {
-        Description = description;
         Stackable = stackable;
-        MaxStackSize = maxStack;
+        MaxStackSize = stackable ? maxStackSize : 1;
         BaseValue = baseValue;
         Weight = weight;
+        Description = description;
     }
 }

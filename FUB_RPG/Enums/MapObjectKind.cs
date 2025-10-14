@@ -8,5 +8,6 @@ public enum MapObjectKind
     Interactable,
     Portal,
     Decoration,
-    Npc // Added
+    Npc,
+    Container
 }

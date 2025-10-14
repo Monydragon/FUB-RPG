@@ -97,12 +97,24 @@ public abstract class ActorBase : EntityBase, IActor, IHasAbilityBook
     }
 
     // Make GetEquipped accessible
-    public IEquipment? GetEquipped(EquipmentSlot slot) => EquipmentManager.Get(slot);
+    public IEquipment? GetEquipped(EquipmentSlot slot) => EquipmentManager.GetEquippedItem(slot);
 
     // Add method to equip items
     public bool TryEquip(IEquipment equipment, out IEquipment? replaced)
     {
-        return EquipmentManager.TryEquip(equipment, this, out replaced);
+        // Capture any currently equipped item in the target slot
+        replaced = EquipmentManager.GetEquippedItem(equipment.Slot);
+        
+        var success = EquipmentManager.TryEquip(equipment, this.Level, this.Class);
+        if (!success)
+        {
+            // If failed to equip, no replacement occurred
+            replaced = null;
+            return false;
+        }
+        
+        // Success: replaced remains as the previous occupant (may be null if slot was empty)
+        return true;
     }
 
     public void SetMovementValidator(Func<int,int,bool> validator) => _canMove = validator;

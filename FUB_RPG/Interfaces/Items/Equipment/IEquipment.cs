@@ -12,4 +12,5 @@ public interface IEquipment : IItem
     int RequiredLevel { get; }
     IReadOnlyCollection<ActorClass> AllowedClasses { get; }
     IReadOnlyDictionary<StatType, double> StatRequirements { get; }
+    EquipmentTier Tier { get; }
 }

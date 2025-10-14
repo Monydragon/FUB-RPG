@@ -22,6 +22,7 @@ public enum WeaponType
 
     // Ranged
     Bow,                // Ranger
+    Crossbow,           // Hunter
     Firearm,            // Machinist
     Chakrams,           // Dancer
     Lute,               // Bard
@@ -55,4 +56,5 @@ public enum WeaponType
     Pickaxe,            // Miner
     Hatchet,            // Botanist
     FishingRod          // Fisher
+    ,
 }

@@ -1,4 +1,5 @@
 ﻿using Spectre.Console;
+using Spectre.Console.Rendering;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Collections.Generic;
@@ -22,6 +23,10 @@ using Fub.Implementations.Abilities;
 using Fub.Interfaces.Abilities;
 using Fub.Interfaces.Combat;
 using Fub.Implementations.Map;
+using Fub.Interfaces.Config;
+using Fub.Implementations.Config;
+using Fub.Interfaces.Items;
+using Fub.Implementations.Items;
 
 namespace Fub.Implementations.Game;
 
@@ -31,13 +36,15 @@ public sealed class GameLoop : IGameLoop
     private readonly IMapGenerator _mapGenerator;
     private readonly MapRenderer _renderer;
     private readonly TurnBasedCombatResolver _combatResolver;
+    private readonly IGameConfig _config;
+    private readonly IItemDatabase _itemDb;
     private bool _running;
     public bool IsRunning => _running;
 
     // Collapsible message log
     private readonly List<string> _log = new();
     private bool _logExpanded;
-    private const int LogMaxEntries = 200;
+    // private const int LogMaxEntries = 200; // replaced by config
     private bool _uiInitialized;
 
     // Map registry for endless generation
@@ -45,20 +52,25 @@ public sealed class GameLoop : IGameLoop
 
     // Simple enemy respawn tracking per map
     private readonly Dictionary<Guid, int> _mapStepCounters = new();
-    private const int RespawnIntervalSteps = 30;
+    // private const int RespawnIntervalSteps = 30; // replaced by config
 
-    // Viewport configuration optimized for 1920x1080 (approximately 240x67 characters in typical console)
-    private const int MaxViewportWidth = 80;  // Maximum cells to show horizontally (each cell ~7 chars wide)
-    private const int MaxViewportHeight = 35; // Maximum cells to show vertically
-    private const int MinViewportWidth = 15;
-    private const int MinViewportHeight = 10;
+    // Viewport config moved to _config
+    // private const int MaxViewportWidth = 80;
+    // private const int MaxViewportHeight = 35;
+    // private const int MinViewportWidth = 15;
+    // private const int MinViewportHeight = 10;
 
     public GameLoop(GameState state, IMapGenerator mapGenerator, MapRenderer renderer)
+        : this(state, mapGenerator, renderer, new DefaultGameConfig(), new InMemoryItemDatabase()) { }
+
+    public GameLoop(GameState state, IMapGenerator mapGenerator, MapRenderer renderer, IGameConfig config, IItemDatabase itemDb)
     {
         _state = state;
         _mapGenerator = mapGenerator;
         _renderer = renderer;
         _combatResolver = new TurnBasedCombatResolver(_state);
+        _config = config;
+        _itemDb = itemDb;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
@@ -113,6 +125,9 @@ public sealed class GameLoop : IGameLoop
 
     private void StartNewGame()
     {
+        // Seed a few default shop items
+        SeedItemDatabase();
+
         // Use EnhancedMapGenerator for better variety
         var enhancedGenerator = new EnhancedMapGenerator();
         var world = new World("Adventure Realm");
@@ -124,7 +139,7 @@ public sealed class GameLoop : IGameLoop
         // Create starting city with the registry
         var startCity = _mapRegistry.CreateStartingCity();
         _state.SetMap(startCity);
-        _state.Party.AddGold(50);
+        _state.Party.AddGold(_config.StartingGold);
         
         PlacePartyAtFirstFloor(startCity);
 
@@ -138,6 +153,17 @@ public sealed class GameLoop : IGameLoop
         PopulateMap(startCity, 0, 4, 4);
 
         _state.SetPhase(GamePhase.Exploring);
+    }
+
+    private void SeedItemDatabase()
+    {
+        // Minimal shop assortment
+        _itemDb.Register(new Fub.Implementations.Items.SimpleItem("Potion", ItemType.Consumable, RarityTier.Common, stackable: true, description: "Heals a small amount."), 15);
+        _itemDb.Register(new Fub.Implementations.Items.SimpleItem("Herb", ItemType.Consumable, RarityTier.Common, stackable: true, description: "Restores a little MP."), 10);
+        _itemDb.Register(new Fub.Implementations.Items.SimpleItem("Scroll", ItemType.Consumable, RarityTier.Uncommon, stackable: false, description: "A mysterious spell scroll."), 40);
+        // A couple of generic weapons
+        _itemDb.Register(new Weapon("Rusty Sword", WeaponType.Sword, DamageType.Physical, 2, 5, 1.1, RarityTier.Common, EquipmentSlot.MainHand), 60);
+        _itemDb.Register(new Weapon("Old Staff", WeaponType.Staff, DamageType.Holy, 1, 4, 1.2, RarityTier.Common, EquipmentSlot.MainHand), 55);
     }
 
     private void ShowSettingsMenu()
@@ -165,20 +191,16 @@ public sealed class GameLoop : IGameLoop
         var map = _state.CurrentMap;
         var leader = _state.Party.Leader;
 
-        // Calculate optimal viewport size for 1920x1080 display
-        // Reserve space for UI elements (HUD takes ~20 lines, actions/log ~8 lines)
-        int reservedVerticalSpace = 28;
-        int logRows = _logExpanded ? Math.Min(8, _log.Count) : 1;
+        // Calculate optimal viewport size based on console and config
+        int reservedVerticalSpace = _config.UiReservedVerticalLines;
+        int logRows = _logExpanded ? Math.Min(_config.LogMaxExpandedRows, _log.Count) : 1;
         int availableVerticalSpace = Math.Max(5, Console.WindowHeight - reservedVerticalSpace - logRows);
         
-        // Each map cell renders as 7 visible characters ("[xxxxx]") plus 1 space between cells
-        int cellWidthChars = 8;
+        int cellWidthChars = _config.CellWidthChars;
         int availableHorizontalSpace = Math.Max(5, (Console.WindowWidth - 2) / cellWidthChars);
         
-        // Clamp to sensible limits and map size
-        _renderer.ViewWidth = Math.Clamp(availableHorizontalSpace, 5, Math.Min(MaxViewportWidth, map.Width));
-        _renderer.ViewHeight = Math.Clamp(availableVerticalSpace, 5, Math.Min(MaxViewportHeight, map.Height));
-        // Enforce odd dimensions for proper centering
+        _renderer.ViewWidth = Math.Clamp(availableHorizontalSpace, 5, Math.Min(_config.MaxViewportWidth, map.Width));
+        _renderer.ViewHeight = Math.Clamp(availableVerticalSpace, 5, Math.Min(_config.MaxViewportHeight, map.Height));
         if (_renderer.ViewWidth % 2 == 0) _renderer.ViewWidth = Math.Max(5, _renderer.ViewWidth - 1);
         if (_renderer.ViewHeight % 2 == 0) _renderer.ViewHeight = Math.Max(5, _renderer.ViewHeight - 1);
 
@@ -231,7 +253,7 @@ public sealed class GameLoop : IGameLoop
         if (moved)
         {
             CheckForAutoInteractions(map);
-            RegeneratePartyResources(mpPct: 0.02, tpPct: 0.03);
+            RegeneratePartyResources(_config.RegenMpPercentPerStep, _config.RegenTpPercentPerStep);
             TrackStepAndMaybeRespawn(map);
         }
 
@@ -242,17 +264,16 @@ public sealed class GameLoop : IGameLoop
     {
         if (!_mapStepCounters.ContainsKey(map.Id)) _mapStepCounters[map.Id] = 0;
         _mapStepCounters[map.Id]++;
-        if (_mapStepCounters[map.Id] >= RespawnIntervalSteps)
+        if (_mapStepCounters[map.Id] >= _config.RespawnIntervalSteps)
         {
             _mapStepCounters[map.Id] = 0;
-            RespawnEnemies(map, maxNew: 3);
+            RespawnEnemies(map, _config.RespawnMaxNew);
         }
     }
 
     private void RespawnEnemies(IMap map, int maxNew)
     {
         if (map.Kind == MapKind.Town || map.Kind == MapKind.Interior) return; // safe zones
-        // Collect floor tiles not occupied and far enough from leader
         var leader = _state.Party.Leader;
         var floors = new List<(int x, int y)>();
         for (int y = 0; y < map.Height; y++)
@@ -261,7 +282,7 @@ public sealed class GameLoop : IGameLoop
                     floors.Add((x, y));
         var occupied = map.Objects.Select(o => (o.X, o.Y)).ToHashSet();
         floors.RemoveAll(p => occupied.Contains(p));
-        floors.RemoveAll(p => Math.Abs(p.x - leader.X) + Math.Abs(p.y - leader.Y) < 6);
+        floors.RemoveAll(p => Math.Abs(p.x - leader.X) + Math.Abs(p.y - leader.Y) < _config.RespawnMinDistanceFromLeader);
         if (floors.Count == 0) return;
         var rng = new System.Random();
         floors = floors.OrderBy(_ => rng.Next()).ToList();
@@ -305,7 +326,7 @@ public sealed class GameLoop : IGameLoop
             if (string.Equals(itemObj.Item.Name, "Coin", StringComparison.OrdinalIgnoreCase))
             {
                 var rng = new System.Random();
-                int amount = rng.Next(1, 11);
+                int amount = rng.Next(_config.CoinPickupMin, _config.CoinPickupMax);
                 _state.Party.AddGold(amount);
                 AddLog($"Picked up {amount} gold coin(s).");
                 map.RemoveObject(itemObj.Id);
@@ -412,461 +433,123 @@ public sealed class GameLoop : IGameLoop
         else AddLog("There's nothing to do here.");
     }
 
-    private void OpenChest(IMap map, IMapObject chest)
+    private void OpenChest(IMap _, IMapObject chest)
     {
         var rng = new System.Random();
-        int gold = rng.Next(10, 51);
+        int gold = rng.Next(_config.ChestGoldMin, _config.ChestGoldMax);
         _state.Party.AddGold(gold);
         AddLog($"You open the chest and find {gold} gold!");
-        map.RemoveObject(chest.Id);
+        _state.CurrentMap?.RemoveObject(chest.Id);
     }
 
     private void OpenShop(IMap map, IMapObject shop)
     {
+        // If this is our richer MapShopObject, use its themed inventory.
+        if (shop is Fub.Implementations.Map.Objects.MapShopObject richShop)
+        {
+            if (richShop.Inventory == null || richShop.Inventory.Count == 0)
+            {
+                AddLog("The shop is empty.");
+                return;
+            }
+
+            var menu = richShop.Inventory.Select(e => $"Buy {e.item.Name} ({e.price}g)").ToList();
+            menu.Add("Leave");
+            var pick = PromptNavigator.PromptChoice($"[bold]{shop.Name}[/]", menu, _state);
+            if (pick == "Leave") return;
+            var match = richShop.Inventory.FirstOrDefault(e => pick.Contains(e.item.Name));
+            if (match.item == null)
+            {
+                AddLog("Item not found.");
+                return;
+            }
+
+            // Check capacity before charging or removing stock
+            var leader = _state.Party.Leader;
+            if (!leader.Inventory.CanAdd(match.item, 1))
+            {
+                AddLog($"Can't carry {match.item.Name}. Inventory full.");
+                return;
+            }
+
+            if (_state.Party.Gold < match.price || !_state.Party.TrySpendGold(match.price))
+            {
+                AddLog("Not enough gold.");
+                return;
+            }
+
+            // Remove from shop stock and add to inventory
+            if (!richShop.TryTakeItem(match.item.Name, out var purchased))
+            {
+                AddLog("That item is no longer available.");
+                // Refund gold
+                _state.Party.AddGold(match.price);
+                return;
+            }
+
+            if (leader.Inventory.TryAdd(purchased.item, 1))
+            {
+                AddLog($"Bought {purchased.item.Name}.");
+            }
+            else
+            {
+                // Should not happen since CanAdd checked; safeguard refund
+                AddLog($"Couldn't carry {purchased.item.Name}.");
+                _state.Party.AddGold(purchased.price);
+            }
+            return;
+        }
+
+        // Fallback: use item database if populated; otherwise simple defaults
+        var dbItems = _itemDb.GetAll().ToList();
+        if (dbItems.Count > 0)
+        {
+            var menu = dbItems.Select(e => $"Buy {e.item.Name} ({e.price}g)").ToList();
+            menu.Add("Leave");
+            var pick = PromptNavigator.PromptChoice("[bold]Shop[/]", menu, _state);
+            if (pick == "Leave") return;
+            var match = dbItems.FirstOrDefault(e => pick.Contains(e.item.Name));
+            if (match.item == null) { AddLog("Item not found."); return; }
+
+            var leader = _state.Party.Leader;
+            if (!leader.Inventory.CanAdd(match.item, 1)) { AddLog($"Can't carry {match.item.Name}. Inventory full."); return; }
+            if (_state.Party.Gold < match.price || !_state.Party.TrySpendGold(match.price)) { AddLog("Not enough gold."); return; }
+            if (leader.Inventory.TryAdd(match.item, 1)) AddLog($"Bought {match.item.Name}.");
+            else { AddLog($"Couldn't carry {match.item.Name}."); _state.Party.AddGold(match.price); }
+            return;
+        }
+        // Original simple fallback
         var options = new List<(string name, int price)> { ("Potion", 15), ("Herb", 10), ("Scroll", 25) };
-        var menu = options.Select(o => $"Buy {o.name} ({o.price}g)").ToList();
-        menu.Add("Leave");
-        var pick = PromptNavigator.PromptChoice("[bold]Shop[/]", menu, _state);
-        if (pick == "Leave") return;
-        var choice = options.First(o => pick.Contains(o.name));
-        if (_state.Party.Gold < choice.price)
+        var simpleMenu = options.Select(o => $"Buy {o.name} ({o.price}g)").ToList();
+        simpleMenu.Add("Leave");
+        var simplePick = PromptNavigator.PromptChoice("[bold]Shop[/]", simpleMenu, _state);
+        if (simplePick == "Leave") return;
+        var choice = options.First(o => simplePick.Contains(o.name));
+        if (_state.Party.Gold < choice.price || !_state.Party.TrySpendGold(choice.price))
         {
             AddLog("Not enough gold.");
             return;
         }
-        if (!_state.Party.TrySpendGold(choice.price))
-        {
-            AddLog("Not enough gold.");
-            return;
-        }
-        var item = new Fub.Implementations.Items.SimpleItem(choice.name, choice.name, RarityTier.Common, stackable: false);
+        var item = new Fub.Implementations.Items.SimpleItem(choice.name, ItemType.Consumable, RarityTier.Common, stackable: false);
         if (_state.Party.Leader.Inventory.TryAdd(item, 1)) AddLog($"Bought {choice.name}.");
         else AddLog($"Couldn't carry {choice.name}.");
     }
 
-    private void UsePortal(IMap currentMap, IMapObject portal)
+    private void TalkToNpc(List<IMapObject> npcs)
     {
-        if (_state.CurrentWorld == null || _mapRegistry == null) 
+        if (npcs == null || npcs.Count == 0) return;
+        var npc = npcs.First();
+        var npcName = npc.Actor?.Name ?? "NPC";
+
+        if (npc is Fub.Implementations.Map.Objects.MapNpcObject richNpc && richNpc.DialogueLines != null && richNpc.DialogueLines.Count > 0)
         {
-            AddLog("Portal system not initialized.");
-            return;
-        }
-        
-        var exitName = portal.Name;
-
-        // Show brief loading message
-        Console.Clear();
-        AnsiConsole.MarkupLine($"[cyan]Traveling via {exitName}...[/]");
-        
-        // Use the registry to handle portal travel and map generation
-        var (destMap, toX, toY) = _mapRegistry.UsePortal(currentMap, exitName);
-
-        if (destMap == null) 
-        { 
-            AddLog("The portal seems inert..."); 
-            return; 
-        }
-
-        // Update game state
-        _state.SetMap(destMap);
-
-        // Validate spawn position
-        if (!destMap.InBounds(toX, toY) || destMap.GetTile(toX, toY).TileType != MapTileType.Floor)
-        {
-            // Find nearest floor tile
-            (toX, toY) = FindNearestFloorTile(destMap, toX, toY);
-        }
-
-        // Teleport party
-        var leader = _state.Party.Leader as ActorBase;
-        leader?.Teleport(toX, toY);
-        foreach (var member in _state.Party.Members)
-        {
-            if (member.Id == leader?.Id) continue;
-            ((ActorBase)member).Teleport(toX, toY);
-        }
-
-        // Update movement validators
-        foreach (var m in _state.Party.Members)
-            m.SetMovementValidator((x, y) => destMap.InBounds(x, y) && destMap.GetTile(x, y).TileType == MapTileType.Floor);
-
-        // Populate the new map if it's empty
-        if (!destMap.Objects.Any())
-        {
-            int enemyCount = destMap.Kind switch
-            {
-                MapKind.Town => 0,
-                MapKind.Overworld => 6,
-                MapKind.Dungeon => 10,
-                _ => 4
-            };
-            
-            int npcCount = destMap.Kind switch
-            {
-                MapKind.Town => 4,
-                MapKind.Overworld => 1,
-                _ => 0
-            };
-            
-            int itemCount = destMap.Kind switch
-            {
-                MapKind.Town => 4,
-                MapKind.Overworld => 3,
-                MapKind.Dungeon => 6,
-                _ => 2
-            };
-            
-            PopulateMap(destMap, enemyCount, npcCount, itemCount);
-        }
-
-        AddLog($"You travel to {destMap.Name} via {exitName}.");
-        
-        // Force UI refresh
-        _uiInitialized = false;
-    }
-
-    private (int x, int y) FindNearestFloorTile(IMap map, int startX, int startY)
-    {
-        // Start from the given position and spiral outward to find a floor tile
-        for (int radius = 0; radius < Math.Max(map.Width, map.Height); radius++)
-        {
-            for (int dx = -radius; dx <= radius; dx++)
-            {
-                for (int dy = -radius; dy <= radius; dy++)
-                {
-                    if (Math.Abs(dx) != radius && Math.Abs(dy) != radius) continue; // Only check the edge
-                    
-                    int x = startX + dx;
-                    int y = startY + dy;
-                    
-                    if (map.InBounds(x, y) && map.GetTile(x, y).TileType == MapTileType.Floor)
-                        return (x, y);
-                }
-            }
-        }
-        
-        // Fallback: find any floor tile
-        for (int y = 0; y < map.Height; y++)
-            for (int x = 0; x < map.Width; x++)
-                if (map.GetTile(x, y).TileType == MapTileType.Floor)
-                    return (x, y);
-        
-        // Last resort: return center of map
-        return (map.Width / 2, map.Height / 2);
-    }
-
-    private void RenderGameWithUi(IMap map, IActor leader)
-    {
-        if (!_uiInitialized) { Console.Clear(); _uiInitialized = true; }
-
-        // Layout constants
-        int sepLines = 1;
-        int hudLines = 2;
-        int maxLogLines = 6;
-        int actionsLines = 1;
-
-        // Compute rows
-        int mapHeight = _renderer.ViewHeight;
-        int row = 0;
-        int consoleHeight = Math.Max(10, Console.WindowHeight);
-
-        // Map section
-        var mapText = _renderer.RenderToString(map, _state.Party);
-        WriteSection(row, mapHeight, mapText);
-        row += mapHeight;
-
-        // Separator
-        int mapLineWidth = (_renderer.ViewWidth * 7) + Math.Max(0, _renderer.ViewWidth - 1); // 7 content + spaces between cells
-        int sepLen = Math.Max(10, Math.Min(Console.WindowWidth - 2, mapLineWidth));
-        string sep = "[grey]" + new string('-', sepLen) + "[/]";
-        WriteSection(row, sepLines, sep + "\n");
-        row += sepLines;
-
-        // HUD summary
-        var sbHud = new StringBuilder();
-        sbHud.AppendLine($"[white]Party:[/] {_state.Party.Members.Count}/{_state.Party.MaxSize}  [yellow]Gold:[/] {_state.Party.Gold}  [grey]Turn:[/] {_state.TurnNumber}");
-        sbHud.AppendLine($"[grey]Map:[/] {map.Name} [dim]({map.Width}x{map.Height})[/]  [grey]View:[/] [dim]({_renderer.ViewWidth}x{_renderer.ViewHeight})[/]");
-        WriteSection(row, hudLines, sbHud.ToString());
-        row += hudLines;
-
-        // Party grid (compact core stats with colored bars), clamp to available rows leaving room for sep, actions, log
-        string partyGrid = BuildPartyCoreGrid(_state.Party.Members, leader.Id);
-        var partyGridLines = (partyGrid ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        int remainingAfterParty = consoleHeight - row - sepLines - actionsLines - maxLogLines;
-        remainingAfterParty = Math.Max(0, remainingAfterParty);
-        int partyLinesToWrite = Math.Min(Math.Max(1, remainingAfterParty), partyGridLines.Length);
-        string partyGridClamped = string.Join("\n", partyGridLines.Take(partyLinesToWrite));
-        WriteSection(row, partyLinesToWrite, partyGridClamped);
-        row += partyLinesToWrite;
-
-        // Separator before actions/log block
-        WriteSection(row, sepLines, sep + "\n");
-        row += sepLines;
-
-        // Actions (above log)
-        string actions = BuildContextActionsString(map, leader);
-        WriteSection(row, actionsLines, actions + "\n");
-        row += actionsLines;
-
-        // Log at the very bottom, clamp to remaining rows
-        int remainingForLog = Math.Max(1, consoleHeight - row);
-        var logText = RenderLogAsString(Math.Min(maxLogLines, remainingForLog));
-        WriteSection(row, Math.Min(maxLogLines, remainingForLog), logText);
-        row += Math.Min(maxLogLines, remainingForLog);
-
-        // Clear out any leftover lines below our last section to avoid overlap
-        ClearRemainingRows(row);
-    }
-
-    private string FormatPartyLine(IActor actor, Guid leaderId)
-    {
-        // Fixed-width columns for alignment
-        string leaderIcon = actor.Id == leaderId ? "[yellow]★[/] " : "   ";
-        string name = TruncPad(actor.Name, 12);
-        string job = TruncPad(actor.EffectiveClass.ToString(), 12);
-        string lvl = $"Lv{actor.Level}".PadRight(4);
-        var hp = actor.GetStat(StatType.Health);
-        var mp = actor.GetStat(StatType.Mana);
-        var tp = actor.GetStat(StatType.Technical);
-        string hpStr = $"[red]HP[/]: {hp.Current:F0}/{hp.Modified:F0}".PadRight(18);
-        string mpStr = $"[blue]MP[/]: {mp.Current:F0}/{mp.Modified:F0}".PadRight(18);
-        string tpStr = $"[magenta]TP[/]: {tp.Current:F0}/{tp.Modified:F0}".PadRight(18);
-        return $"{leaderIcon}{name} {lvl} {job}  {hpStr} {mpStr} {tpStr}";
-    }
-
-    private static string TruncPad(string value, int width)
-    {
-        if (string.IsNullOrEmpty(value)) return new string(' ', width);
-        var trimmed = value.Length > width ? value.Substring(0, width) : value;
-        return trimmed.PadRight(width);
-    }
-
-    private void WriteSection(int startRow, int height, string markup)
-    {
-        try
-        {
-            if (height <= 0) return;
-            int width = Math.Max(1, Console.WindowWidth);
-            // Clear region
-            for (int i = 0; i < height; i++)
-            {
-                if (startRow + i >= Console.WindowHeight) break;
-                Console.SetCursorPosition(0, startRow + i);
-                Console.Write(new string(' ', width));
-            }
-            if (startRow >= Console.WindowHeight) return;
-            // Limit content to at most height lines
-            var lines = (markup ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-            var limited = new StringBuilder();
-            for (int i = 0; i < lines.Length && i < height; i++)
-            {
-                limited.AppendLine(lines[i]);
-            }
-            Console.SetCursorPosition(0, startRow);
-            AnsiConsole.Write(new Markup(limited.ToString()));
-        }
-        catch
-        {
-            _uiInitialized = false;
-        }
-    }
-
-    private void ClearRemainingRows(int startRow)
-    {
-        try
-        {
-            int width = Math.Max(1, Console.WindowWidth);
-            for (int y = startRow; y < Console.WindowHeight; y++)
-            {
-                Console.SetCursorPosition(0, y);
-                Console.Write(new string(' ', width));
-            }
-        }
-        catch
-        {
-            _uiInitialized = false;
-        }
-    }
-
-    private string RenderLogAsString(int maxLines)
-    {
-        if (_log.Count == 0)
-        {
-            var collapsed = "[grey]Log: (empty)[/]  " + ToggleLogHint();
-            return collapsed;
-        }
-
-        if (_logExpanded)
-        {
-            int rows = System.Math.Min(maxLines - 1, _log.Count); // leave last line for hint when possible
-            rows = System.Math.Max(1, rows);
-            var slice = _log.Skip(System.Math.Max(0, _log.Count - rows)).ToList();
-            var sb = new StringBuilder();
-            foreach (var l in slice) sb.AppendLine(l);
-            sb.Append(ToggleLogHint());
-            return sb.ToString();
+            foreach (var line in richNpc.DialogueLines)
+                AddLog($"{npcName}: \"{line}\"");
         }
         else
         {
-            var last = _log[^1];
-            return $"[grey]Log:[/] {last}  {ToggleLogHint()}";
+            AddLog($"{npcName}: \"Greetings, traveler! The dungeon is dangerous. Stay safe!\"");
         }
-    }
-
-    private string ToggleLogHint()
-    {
-        if (_state.InputMode == InputMode.Controller)
-        {
-            var c = _state.ControllerType;
-            return "[grey](Toggle Log " + ControllerUi.Log(c) + ")[/]";
-        }
-        return "[grey](Toggle Log: L)[/]";
-    }
-
-    // === New: Compact party HUD grid with colored bars for HP/MP/TP/EXP ===
-    private string BuildPartyCoreGrid(IReadOnlyList<IActor> members, Guid leaderId)
-    {
-        if (members.Count == 0) return "[grey]No party members[/]\n";
-        int consoleWidth = Math.Max(80, Console.WindowWidth);
-        int barWidth = Math.Clamp((consoleWidth - 10) / 4 - 10, 12, 24);
-
-        // Dynamically size name/species/class columns to reduce truncation
-        // Visible chars per line: star(3) + name + 2 + species + 2 + class + 2 + lvl(6) = sum + 15
-        int minName = 16, minSpecies = 12, minClass = 16;
-        int fixedOverhead = 15 + 0; // see formula above
-        int baseTotal = minName + minSpecies + minClass + fixedOverhead;
-        int extra = Math.Max(0, consoleWidth - baseTotal);
-        // Distribute extra width: favor class, then name, then species
-        int addClass = Math.Min(extra, 8); extra -= addClass; // up to +8
-        int addName = Math.Min(extra, 6);  extra -= addName;  // up to +6
-        int addSpec = Math.Min(extra, 4);  extra -= addSpec;  // up to +4
-        int nameW = minName + addName;
-        int speciesW = minSpecies + addSpec;
-        int classW = minClass + addClass;
-
-        var sb = new StringBuilder();
-        foreach (var m in members)
-        {
-            string star = m.Id == leaderId ? "[yellow]★[/] " : "  ";
-            string name = TruncPad(m.Name, nameW);
-            string species = TruncPad(m.Species.ToString(), speciesW);
-            string cls = TruncPad(m.EffectiveClass.ToString(), classW);
-            string lvl = $"Lv {m.Level}".PadRight(6);
-
-            sb.AppendLine($"{star}[white]{name}[/]  [green]{species}[/]  [cyan]{cls}[/]  [yellow]{lvl}[/]");
-
-            var hp = m.GetStat(StatType.Health);
-            var mp = m.GetStat(StatType.Mana);
-            var tp = m.GetStat(StatType.Technical);
-            var jl = m.JobSystem.GetJobLevel(m.EffectiveClass);
-            double expCur = jl.Experience;
-            double expMax = Math.Max(1, jl.ExperienceToNextLevel);
-            long toNext = Math.Max(0, jl.ExperienceToNextLevel - jl.Experience);
-            string hpBar = MakeBar("HP", hp.Current, hp.Modified, barWidth, "red1");
-            string mpBar = MakeBar("MP", mp.Current, mp.Modified, barWidth, "deepskyblue1");
-            string tpBar = MakeBar("TP", tp.Current, tp.Modified, barWidth, "orchid");
-            string xpBar = MakeBar("EXP", expCur, expMax, barWidth, "yellow3");
-            sb.AppendLine($"{hpBar}  {mpBar}  {tpBar}  {xpBar}  [yellow]ToNext:[/] [white]{toNext}[/]");
-        }
-        return sb.ToString();
-    }
-
-    private static string MakeBar(string label, double current, double max, int width, string color)
-    {
-        max = Math.Max(1.0, max);
-        current = Math.Max(0.0, Math.Min(current, max));
-        int filled = (int)Math.Round((current / max) * width);
-        int empty = Math.Max(0, width - filled);
-        string fill = new string('\u2588', Math.Max(0, filled));
-        string rest = new string('\u2500', Math.Max(0, empty));
-        string value = $"{current:0}/{max:0}";
-        return $"[{color}]{label}[/]: [{color}]{fill}[/][grey]{rest}[/] [{color}]{value}[/]";
-    }
-
-    private void ShowVictoryResults(ICombatSession session, List<IActor> enemyActors, Dictionary<Guid,int> preLevels)
-    {
-        // Compute total EXP from enemies
-        long totalExp = enemyActors.Sum(e => (long)(50 * System.Math.Pow(e.Level, 1.5)));
-
-        // Prepare result data per ally
-        var results = new List<(IActor actor, int levelBefore, int levelAfter, long expGained, List<string> learned)>();
-        foreach (var ally in _state.Party.Members.Where(a => a.GetStat(StatType.Health).Current > 0))
-        {
-            var job = ally.EffectiveClass;
-            int before = preLevels.TryGetValue(ally.Id, out var lvl) ? lvl : ally.JobSystem.GetJobLevel(job).Level;
-            bool leveled = ally.JobSystem.AddExperience(job, totalExp);
-            int after = ally.JobSystem.GetJobLevel(job).Level;
-
-            var learned = new List<string>();
-            if (after > before)
-            {
-                for (int lvlUp = before + 1; lvlUp <= after; lvlUp++)
-                {
-                    foreach (var unlock in ClassAbilityLearnset.GetUnlocks(job))
-                    {
-                        if (unlock.Level == lvlUp && ally is IHasAbilityBook hab)
-                        {
-                            var gained = hab.AbilityBook.Learn(unlock.Factory());
-                            if (gained)
-                                learned.Add(hab.AbilityBook.KnownAbilities[^1].Name);
-                        }
-                    }
-                }
-            }
-
-            results.Add((ally, before, after, totalExp, learned));
-        }
-
-        // Render results screen
-        AnsiConsole.Clear();
-        AnsiConsole.Write(new Rule("[bold green]\ud83c\udf89 Victory Results \ud83c\udf89[/]").RuleStyle("green"));
-        AnsiConsole.WriteLine();
-
-        // Enemies defeated list
-        var enemiesPanel = new Panel(string.Join(System.Environment.NewLine, enemyActors.Select(e => $"[red]{e.Name}[/] Lv {e.Level}")))
-            .Header("[bold red]Enemies Defeated[/]").BorderColor(Color.Red);
-        AnsiConsole.Write(enemiesPanel);
-
-        // Party results table with colored bars
-        var table = new Table().Border(TableBorder.Rounded).Title("[bold cyan]Party Gains[/]");
-        table.AddColumn("Name");
-        table.AddColumn("Class");
-        table.AddColumn("Lv Before");
-        table.AddColumn("Lv After");
-        table.AddColumn("EXP Gained");
-        table.AddColumn("EXP Bar");
-
-        int barWidth = Math.Clamp((System.Console.WindowWidth - 40) / 4, 12, 24);
-        foreach (var r in results)
-        {
-            var jl = r.actor.JobSystem.GetJobLevel(r.actor.EffectiveClass);
-            double cur = jl.Experience;
-            double max = System.Math.Max(1, jl.ExperienceToNextLevel);
-            table.AddRow(
-                r.actor.Name,
-                r.actor.EffectiveClass.ToString(),
-                $"[yellow]{r.levelBefore}[/]",
-                $"[yellow]{r.levelAfter}[/]",
-                $"[yellow]{r.expGained}[/]",
-                Bar("EXP", cur, max, barWidth, "yellow3")
-            );
-        }
-        AnsiConsole.Write(table);
-
-        // Learned abilities panel (if any)
-        var learnedAll = results.SelectMany(r => r.learned.Select(name => ($"{r.actor.Name}", name))).ToList();
-        if (learnedAll.Count > 0)
-        {
-            var sb = new System.Text.StringBuilder();
-            foreach (var g in learnedAll)
-                sb.AppendLine($"[green]{g.Item1}[/] learned [yellow]{g.Item2}[/]!");
-            var learnedPanel = new Panel(new Markup(sb.ToString()))
-                .Header("[bold yellow]\u2728 New Abilities[/]").BorderColor(Color.Yellow);
-            AnsiConsole.Write(learnedPanel);
-        }
-
-        AnsiConsole.MarkupLine("[grey]Press any key to continue...[/]");
-        InputWaiter.WaitForAny(_state.InputMode);
     }
 
     private void EngageCombat(IMap map, List<IMapObject> enemies)
@@ -904,57 +587,72 @@ public sealed class GameLoop : IGameLoop
         }
     }
 
+    private void ShowVictoryResults(ICombatSession session, List<IActor> enemyActors, Dictionary<Guid,int> preLevels)
+    {
+        // Compute total EXP from enemies
+        long totalExp = enemyActors.Sum(e => (long)(50 * System.Math.Pow(e.Level, 1.5)));
+
+        // Apply EXP and capture level ups
+        var results = new List<(IActor actor, int before, int after, long gained, bool leveled)>();
+        foreach (var ally in _state.Party.Members)
+        {
+            var job = ally.EffectiveClass;
+            int before = preLevels.TryGetValue(ally.Id, out var lvl) ? lvl : ally.JobSystem.GetJobLevel(job).Level;
+            bool leveled = ally.JobSystem.AddExperience(job, totalExp);
+            int after = ally.JobSystem.GetJobLevel(job).Level;
+            bool learned = false;
+            // Hook: if ability system ties learning to level ups, it would be triggered by AddExperience internally.
+            results.Add((ally, before, after, totalExp, learned));
+        }
+
+        // Render results
+        AnsiConsole.Clear();
+        AnsiConsole.Write(new Rule("[bold green]\uD83C\uDF89 Victory Results \uD83C\uDF89[/]").RuleStyle("green"));
+        AnsiConsole.WriteLine();
+
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("Ally");
+        table.AddColumn("Job");
+        table.AddColumn("Level");
+        table.AddColumn("EXP");
+        foreach (var r in results)
+        {
+            string levelText = r.before == r.after ? $"{r.after}" : $"{r.before} \u2192 [yellow]{r.after}[/]";
+            table.AddRow(r.actor.Name, r.actor.EffectiveClass.ToString(), levelText, "+" + r.gained);
+        }
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+
+        // Show EXP bars per ally
+        foreach (var m in _state.Party.Members)
+        {
+            var jl = m.JobSystem.GetJobLevel(m.EffectiveClass);
+            double expCurrent = jl.Experience;
+            double expMax = Math.Max(1, jl.ExperienceToNextLevel);
+            var bar = Bar("EXP", expCurrent, expMax, width: 40, color: "yellow");
+            AnsiConsole.MarkupLine($"[bold]{m.Name}[/] {bar}");
+        }
+
+        AnsiConsole.MarkupLine("\n[grey]Press any key to continue...[/]");
+        InputWaiter.WaitForAny(_state.InputMode);
+        _uiInitialized = false; // ensure next explore frame redraws
+    }
+
     private void SearchRoom(IMap _)
     {
         var rng = new System.Random();
         var roll = rng.Next(100);
-        if (roll < 30)
+        if (roll < _config.SearchFindGoldChancePercent)
         {
-            int gold = rng.Next(5, 21);
+            int gold = rng.Next(_config.SearchGoldMin, _config.SearchGoldMax);
             _state.Party.AddGold(gold);
             AddLog($"You found {gold} gold coins!");
         }
-        else if (roll < 50)
+        else if (roll < _config.SearchFindGoldChancePercent + _config.SearchFindPassageChancePercent)
         {
             AddLog("You found a hidden passage... but it's blocked.");
         }
         else AddLog("You found nothing of interest.");
-    }
-
-    private bool TryMoveParty(int dx, int dy)
-    {
-        var leader = _state.Party.Leader;
-        int newX = leader.X + dx;
-        int newY = leader.Y + dy;
-        if (_state.CurrentMap == null) return false;
-        if (!_state.CurrentMap.InBounds(newX, newY)) return false;
-        if (_state.CurrentMap.GetTile(newX, newY).TileType != MapTileType.Floor) return false;
-        foreach (var member in _state.Party.Members) member.TryMove(dx, dy);
-        return true;
-    }
-
-    private void TalkToNpc(List<IMapObject> npcs)
-    {
-        if (npcs == null || npcs.Count == 0) return;
-        var npc = npcs.First();
-        var npcName = npc.Actor?.Name ?? "NPC";
-        AddLog($"{npcName}: \"Greetings, traveler! The dungeon is dangerous. Stay safe!\"");
-    }
-
-
-    private void AddLog(string message)
-    {
-        if (string.IsNullOrWhiteSpace(message)) return;
-        _log.Add(message);
-        if (_log.Count > LogMaxEntries)
-            _log.RemoveRange(0, _log.Count - LogMaxEntries);
-    }
-
-    private static int SafeLineCount(string text)
-    {
-        if (text == null) return 0;
-        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        return lines.Length;
     }
 
     // Colored bar consistent with battle/results UI
@@ -970,11 +668,80 @@ public sealed class GameLoop : IGameLoop
         return $"[{color}]{label}[/]: [{color}]{fill}[/][grey]{rest}[/] [{color}]{value}[/]";
     }
 
+    private void InspectPartyMember()
+    {
+        var names = _state.Party.Members.Select(m => m.Name).ToList();
+        names.Add("Back");
+        var pick = PromptNavigator.PromptChoice("Inspect which member?", names, _state);
+        if (pick == "Back") return;
+        var m = _state.Party.Members.First(x => x.Name == pick);
+
+        AnsiConsole.Clear();
+        AnsiConsole.Write(new Rule($"[bold cyan]Inspect: {m.Name}[/]").RuleStyle("cyan"));
+        var info = new Table().Border(TableBorder.Rounded);
+        info.AddColumn("Field");
+        info.AddColumn("Value");
+        info.AddRow("Species", m.Species.ToString());
+        info.AddRow("Base Class", m.Class.ToString());
+        info.AddRow("Effective Class", m.EffectiveClass.ToString());
+        info.AddRow("Level", m.Level.ToString());
+        info.AddRow("Experience", m.Experience.ToString());
+        var hp = m.GetStat(StatType.Health);
+        var mp = m.GetStat(StatType.Mana);
+        var tp = m.GetStat(StatType.Technical);
+        info.AddRow("HP", $"{hp.Current:F0}/{hp.Modified:F0}");
+        info.AddRow("MP", $"{mp.Current:F0}/{mp.Modified:F0}");
+        info.AddRow("TP", $"{tp.Current:F0}/{tp.Modified:F0}");
+        AnsiConsole.Write(info);
+        AnsiConsole.WriteLine();
+
+        // Stats grid
+        var statsTable = new Table().Border(TableBorder.Rounded);
+        statsTable.AddColumn("Stat");
+        statsTable.AddColumn("Value");
+        foreach (var s in m.AllStats)
+            statsTable.AddRow(s.Key.ToString(), s.Value.Modified.ToString("F0"));
+        AnsiConsole.Write(statsTable);
+        AnsiConsole.WriteLine();
+
+        // Abilities
+        if (m is Fub.Interfaces.Abilities.IHasAbilityBook hasBook && hasBook.AbilityBook.KnownAbilities.Count > 0)
+        {
+            var abil = new Table().Border(TableBorder.Rounded);
+            abil.AddColumn("Ability");
+            abil.AddColumn("Category");
+            abil.AddColumn("Target");
+            foreach (var a in hasBook.AbilityBook.KnownAbilities)
+                abil.AddRow(a.Name, a.Category.ToString(), a.TargetType.ToString());
+            AnsiConsole.Write(abil);
+            AnsiConsole.WriteLine();
+        }
+
+        // Equipment
+        if (m is ActorBase ab)
+        {
+            var eq = new Table().Border(TableBorder.Rounded);
+            eq.AddColumn("Slot");
+            eq.AddColumn("Item");
+            foreach (EquipmentSlot slot in System.Enum.GetValues<EquipmentSlot>())
+            {
+                var e = ab.GetEquipped(slot);
+                eq.AddRow(slot.ToString(), e?.Name ?? "[grey]Empty[/]");
+            }
+            AnsiConsole.Write(eq);
+            AnsiConsole.WriteLine();
+        }
+
+        AnsiConsole.MarkupLine("[grey]Press any key to return...[/]");
+        InputWaiter.WaitForAny(_state.InputMode);
+        _uiInitialized = false;
+    }
+
     private void ShowPartyMenu()
     {
         var choices = new List<string> { "Inspect Member", "View Stats", "Change Leader", "Manage Equipment", "Settings", "Back" };
         var choice = PromptNavigator.PromptChoice("[bold cyan]Party Menu[/]", choices, _state);
-        if (choice == "Inspect Member") InspectMember();
+        if (choice == "Inspect Member") InspectPartyMember();
         else if (choice == "View Stats") ShowPartyStats();
         else if (choice == "Change Leader") ChangeLeader();
         else if (choice == "Manage Equipment") ShowEquipmentMenu();
@@ -1029,7 +796,7 @@ public sealed class GameLoop : IGameLoop
             if (selectedItem.item is IWeapon w)
             {
                 AnsiConsole.MarkupLine("Weapon Type: " + w.WeaponType);
-                if (w is Weapon ww) AnsiConsole.MarkupLine("Tier: " + ww.Tier);
+                AnsiConsole.MarkupLine("Tier: " + w.Tier);
             }
             AnsiConsole.MarkupLine("Press any key to continue...");
             InputWaiter.WaitForAny(_state.InputMode);
@@ -1195,164 +962,21 @@ public sealed class GameLoop : IGameLoop
         foreach (var itemObj in items)
         {
             if (itemObj.Item == null) continue;
-            
             if (string.Equals(itemObj.Item.Name, "Coin", StringComparison.OrdinalIgnoreCase))
             {
                 var rng = new System.Random();
-                int amount = rng.Next(1, 11);
+                int amount = rng.Next(_config.CoinPickupMin, _config.CoinPickupMax);
                 _state.Party.AddGold(amount);
                 AddLog($"Picked up {amount} gold coin(s).");
                 map.RemoveObject(itemObj.Id);
                 continue;
             }
-            
             if (leader.Inventory.TryAdd(itemObj.Item, 1))
             {
                 map.RemoveObject(itemObj.Id);
                 AddLog($"Picked up {itemObj.Item.Name}.");
             }
-            else
-            {
-                AddLog($"Inventory is full! Can't pick up {itemObj.Item.Name}.");
-            }
         }
-    }
-
-    private void ShowHelpScreen()
-    {
-        AnsiConsole.Clear();
-        AnsiConsole.Write(new Rule("[bold cyan]Help & Controls[/]").RuleStyle("cyan"));
-        AnsiConsole.WriteLine();
-
-        var controlsTable = new Table().Border(TableBorder.Rounded);
-        controlsTable.AddColumn("[bold]Action[/]");
-        controlsTable.AddColumn("[bold]Key[/]");
-        
-        if (_state.InputMode == InputMode.Controller)
-        {
-            var ctype = _state.ControllerType;
-            controlsTable.AddRow("Move", ControllerUi.MovePad(ctype));
-            controlsTable.AddRow("Interact/Confirm", ControllerUi.Confirm(ctype));
-            controlsTable.AddRow("Search/Cancel", ControllerUi.Cancel(ctype));
-            controlsTable.AddRow("Inventory", ControllerUi.Inventory(ctype));
-            controlsTable.AddRow("Party Menu", ControllerUi.Party(ctype));
-            controlsTable.AddRow("Help", ControllerUi.Help(ctype));
-            controlsTable.AddRow("Menu", ControllerUi.Menu(ctype));
-            controlsTable.AddRow("Toggle Log", ControllerUi.Log(ctype));
-        }
-        else
-        {
-            controlsTable.AddRow("Move", "WASD or Arrow Keys");
-            controlsTable.AddRow("Interact/Confirm", "Space");
-            controlsTable.AddRow("Search", "R");
-            controlsTable.AddRow("Inventory", "I");
-            controlsTable.AddRow("Party Menu", "P");
-            controlsTable.AddRow("World Map", "M");
-            controlsTable.AddRow("Help", "H");
-            controlsTable.AddRow("Menu", "ESC");
-            controlsTable.AddRow("Toggle Log", "L");
-        }
-
-        AnsiConsole.Write(controlsTable);
-        AnsiConsole.WriteLine();
-        
-        AnsiConsole.MarkupLine("[bold yellow]Game Tips:[/]");
-        AnsiConsole.MarkupLine("• Walk over items to automatically pick them up");
-        AnsiConsole.MarkupLine("• Enemies will engage you automatically when you enter their tile");
-        AnsiConsole.MarkupLine("• Search rooms (R key) to find hidden treasure");
-        AnsiConsole.MarkupLine("• Visit shops to buy helpful items");
-        AnsiConsole.MarkupLine("• Use portals to travel between maps");
-        AnsiConsole.MarkupLine("• Party members regenerate MP and TP as you walk");
-        AnsiConsole.WriteLine();
-        
-        AnsiConsole.MarkupLine("[grey]Press any key to continue...[/]");
-        InputWaiter.WaitForAny(_state.InputMode);
-        _uiInitialized = false;
-    }
-
-    private bool ConfirmExitToMenu()
-    {
-        var choice = PromptNavigator.PromptChoice(
-            "[yellow]Exit to Main Menu?[/]",
-            new List<string> { "Yes", "No" },
-            _state);
-        return choice == "Yes";
-    }
-
-    private void InspectMember()
-    {
-        var memberNames = _state.Party.Members.Select(m => m.Name).ToList();
-        memberNames.Add("Back");
-        var choice = PromptNavigator.PromptChoice("Select party member to inspect:", memberNames, _state);
-        if (choice == "Back") return;
-        
-        var member = _state.Party.Members.First(m => m.Name == choice);
-        ShowMemberDetails(member);
-    }
-
-    private void ShowMemberDetails(IActor member)
-    {
-        AnsiConsole.Clear();
-        AnsiConsole.Write(new Rule($"[bold cyan]{member.Name}[/]").RuleStyle("cyan"));
-        AnsiConsole.WriteLine();
-
-        // Basic info
-        var infoTable = new Table().Border(TableBorder.Rounded);
-        infoTable.AddColumn("[bold]Property[/]");
-        infoTable.AddColumn("[bold]Value[/]");
-        infoTable.AddRow("Name", member.Name);
-        infoTable.AddRow("Species", member.Species.ToString());
-        infoTable.AddRow("Base Class", member.Class.ToString());
-        infoTable.AddRow("Effective Class", member.EffectiveClass.ToString());
-        infoTable.AddRow("Level", member.Level.ToString());
-        infoTable.AddRow("Experience", member.Experience.ToString());
-        
-        AnsiConsole.Write(infoTable);
-        AnsiConsole.WriteLine();
-
-        // Stats
-        var statsTable = new Table().Border(TableBorder.Rounded);
-        statsTable.AddColumn("[bold]Stat[/]");
-        statsTable.AddColumn("[bold]Current[/]");
-        statsTable.AddColumn("[bold]Max[/]");
-        
-        var hp = member.GetStat(StatType.Health);
-        var mp = member.GetStat(StatType.Mana);
-        var tp = member.GetStat(StatType.Technical);
-        var str = member.GetStat(StatType.Strength);
-        var agi = member.GetStat(StatType.Agility);
-        var vit = member.GetStat(StatType.Vitality);
-        var intel = member.GetStat(StatType.Intellect);
-        var spirit = member.GetStat(StatType.Spirit);
-        var luck = member.GetStat(StatType.Luck);
-        
-        statsTable.AddRow("[red]Health[/]", $"{hp.Current:F0}", $"{hp.Modified:F0}");
-        statsTable.AddRow("[blue]Mana[/]", $"{mp.Current:F0}", $"{mp.Modified:F0}");
-        statsTable.AddRow("[magenta]Technical[/]", $"{tp.Current:F0}", $"{tp.Modified:F0}");
-        statsTable.AddRow("Strength", $"{str.Current:F0}", $"{str.Modified:F0}");
-        statsTable.AddRow("Agility", $"{agi.Current:F0}", $"{agi.Modified:F0}");
-        statsTable.AddRow("Vitality", $"{vit.Current:F0}", $"{vit.Modified:F0}");
-        statsTable.AddRow("Intellect", $"{intel.Current:F0}", $"{intel.Modified:F0}");
-        statsTable.AddRow("Spirit", $"{spirit.Current:F0}", $"{spirit.Modified:F0}");
-        statsTable.AddRow("Luck", $"{luck.Current:F0}", $"{luck.Modified:F0}");
-        
-        AnsiConsole.Write(statsTable);
-        AnsiConsole.WriteLine();
-
-        // Abilities (if available)
-        if (member is IHasAbilityBook hab && hab.AbilityBook.KnownAbilities.Count > 0)
-        {
-            AnsiConsole.MarkupLine("[bold yellow]Known Abilities:[/]");
-            foreach (var ability in hab.AbilityBook.KnownAbilities)
-            {
-                AnsiConsole.MarkupLine($"  • {ability.Name} ({ability.Category})");
-            }
-            AnsiConsole.WriteLine();
-        }
-
-        AnsiConsole.MarkupLine("[grey]Press any key to continue...[/]");
-        InputWaiter.WaitForAny(_state.InputMode);
-        _uiInitialized = false;
     }
 
     private void PlacePartyAtFirstFloor(IMap map)
@@ -1373,8 +997,6 @@ public sealed class GameLoop : IGameLoop
                 }
             }
         }
-
-        // Place all party members onto the leader's tile so the party occupies one cell
         foreach (var member in _state.Party.Members)
         {
             if (member.Id == leader.Id) continue;
@@ -1395,25 +1017,192 @@ public sealed class GameLoop : IGameLoop
         }
     }
 
-    private static Weapon CreateStarterWeaponForClass(ActorClass cls)
+    private Weapon CreateStarterWeaponForClass(ActorClass cls)
     {
-        var spec = ClassWeaponMappings.GetStarterSpec(cls);
-        return new Weapon(spec.name, spec.type, spec.dmg, 4, 8, 1.0,
-            RarityTier.Common, EquipmentSlot.MainHand, requiredLevel: 1,
-            allowedClasses: new[] { cls }, statRequirements: null, tier: EquipmentTier.Simple);
+        var (name, type, dmgType) = ClassWeaponMappings.GetStarterSpec(cls);
+        return new Weapon(name, type, dmgType,
+            _config.StartingWeaponMinDamage,
+            _config.StartingWeaponMaxDamage,
+            _config.StartingWeaponAttackSpeed,
+            RarityTier.Common,
+            EquipmentSlot.MainHand,
+            requiredLevel: 1,
+            allowedClasses: new[] { cls },
+            statRequirements: null,
+            tier: _config.StartingWeaponTier);
+    }
+
+
+    private void ShowHelpScreen()
+    {
+        AnsiConsole.Clear();
+        AnsiConsole.Write(new Rule("[bold cyan]Help & Controls[/]").RuleStyle("cyan"));
+        AnsiConsole.WriteLine();
+        var controlsTable = new Table().Border(TableBorder.Rounded);
+        controlsTable.AddColumn("[bold]Action[/]");
+        controlsTable.AddColumn("[bold]Key[/]");
+        controlsTable.AddRow("Move", "WASD or Arrow Keys");
+        controlsTable.AddRow("Interact/Confirm", "Space");
+        controlsTable.AddRow("Search", "R");
+        controlsTable.AddRow("Inventory", "I");
+        controlsTable.AddRow("Party Menu", "P");
+        controlsTable.AddRow("World Map", "M");
+        controlsTable.AddRow("Help", "H");
+        controlsTable.AddRow("Menu", "ESC");
+        controlsTable.AddRow("Toggle Log", "L");
+        AnsiConsole.Write(controlsTable);
+        AnsiConsole.MarkupLine("\n[grey]Press any key to continue...[/]");
+        InputWaiter.WaitForAny(_state.InputMode);
+        _uiInitialized = false;
+    }
+
+    private bool ConfirmExitToMenu()
+    {
+        var choice = PromptNavigator.PromptChoice(
+            "[yellow]Exit to Main Menu?[/]",
+            new List<string> { "Yes", "No" },
+            _state);
+        return choice == "Yes";
+    }
+
+    private void UsePortal(IMap currentMap, IMapObject portal)
+    {
+        if (_state.CurrentWorld == null || _mapRegistry == null)
+        {
+            AddLog("Portal system not initialized.");
+            return;
+        }
+        var exitName = portal.Name;
+        Console.Clear();
+        AnsiConsole.MarkupLine($"[cyan]Traveling via {exitName}...[/]");
+        var (destMap, toX, toY) = _mapRegistry.UsePortal(currentMap, exitName);
+        if (destMap == null)
+        {
+            AddLog("The portal doesn't seem to lead anywhere.");
+            return;
+        }
+        _state.SetMap(destMap);
+        if (_state.Party.Leader is ActorBase leader)
+            leader.Teleport(toX, toY);
+        foreach (var member in _state.Party.Members)
+        {
+            if (member.Id == _state.Party.Leader.Id) continue;
+            ((ActorBase)member).Teleport(toX, toY);
+        }
+        
+        // FIX: Reset movement validators for all party members on the new map
+        foreach (var member in _state.Party.Members)
+            member.SetMovementValidator((x, y) => destMap.InBounds(x, y) && destMap.GetTile(x, y).TileType == MapTileType.Floor);
+        
+        PopulateMap(destMap, 0, 2, 3);
+        _uiInitialized = false;
+    }
+
+    private void AddLog(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return;
+        _log.Add(message);
+        if (_log.Count > _config.LogMaxEntries)
+            _log.RemoveRange(0, _log.Count - _config.LogMaxEntries);
+    }
+
+    private bool TryMoveParty(int dx, int dy)
+    {
+        var leader = _state.Party.Leader;
+        int newX = leader.X + dx;
+        int newY = leader.Y + dy;
+        if (_state.CurrentMap == null) return false;
+        if (!_state.CurrentMap.InBounds(newX, newY)) return false;
+        if (_state.CurrentMap.GetTile(newX, newY).TileType != MapTileType.Floor) return false;
+        foreach (var member in _state.Party.Members) member.TryMove(dx, dy);
+        return true;
     }
 
     private void PopulateMap(IMap map, int enemyCount, int npcCount, int itemCount)
     {
         var populator = new MapContentPopulator();
-        var cfg = new MapContentConfig 
-        { 
-            EnemyCount = enemyCount, 
-            NpcCount = npcCount, 
-            ItemCount = itemCount, 
-            MinDistanceFromLeader = 5, 
-            Seed = null 
+        var cfg = new MapContentConfig
+        {
+            EnemyCount = enemyCount,
+            NpcCount = npcCount,
+            ItemCount = itemCount,
+            MinDistanceFromLeader = 5
         };
         populator.Populate(map, _state.Party, cfg);
+    }
+
+    private void RenderGameWithUi(IMap map, IActor leader)
+    {
+        Console.Clear();
+
+        // MAP INFO: Display above the map
+        var mapInfoText = $"[bold cyan]{map.Name}[/] [grey]|[/] [yellow]{map.Kind}[/] [grey]|[/] [grey]Theme: {map.Theme}[/] [grey]|[/] [gold1]Gold: {_state.Party.Gold}g[/]";
+        AnsiConsole.MarkupLine(mapInfoText);
+        AnsiConsole.WriteLine();
+
+        // Render map
+        var mapText = _renderer.RenderToString(map, _state.Party);
+        AnsiConsole.Write(new Markup(mapText));
+
+        // Spacer
+        AnsiConsole.WriteLine();
+
+        // PARTY INFO: Enhanced display with leader indicator
+        var leaderIcon = "\u2605"; // Star symbol for leader
+        var partyHeader = $"[bold cyan]Party[/] [grey]|[/] [yellow]Leader: {leaderIcon} {leader.Name}[/] [grey]|[/] [green]Members: {_state.Party.Members.Count}/{_state.Party.MaxSize}[/]";
+        AnsiConsole.Write(new Rule(partyHeader).RuleStyle("grey"));
+
+        // Render party horizontally using Panels within Columns
+        var members = _state.Party.Members;
+        int memberCount = Math.Max(1, members.Count);
+        int usableWidth = Math.Max(40, Console.WindowWidth - 6);
+        // Estimate per-member content width (account for panel borders and spacing)
+        int perMember = Math.Clamp((usableWidth / memberCount) - 6, 12, 28);
+
+        var cards = new List<Spectre.Console.Rendering.IRenderable>(memberCount);
+        foreach (var m in members)
+        {
+            var hp = m.GetStat(StatType.Health);
+            var mp = m.GetStat(StatType.Mana);
+            var tp = m.GetStat(StatType.Technical);
+
+            string body = string.Join('\n', new[]
+            {
+                Bar("HP", hp.Current, Math.Max(1.0, hp.Modified), perMember, "red"),
+                Bar("MP", mp.Current, Math.Max(1.0, mp.Modified), perMember, "dodgerblue1"),
+                Bar("TP", tp.Current, Math.Max(1.0, tp.Modified), perMember, "green")
+            });
+
+            var panel = new Panel(new Markup(body))
+            {
+                Border = BoxBorder.Rounded,
+                BorderStyle = new Style(m.Id == leader.Id ? Color.Yellow : Color.Grey),
+                Expand = true
+            };
+            
+            // Add leader indicator to header
+            var leaderIndicator = m.Id == leader.Id ? $"[yellow]{leaderIcon}[/] " : "";
+            panel.Header = new PanelHeader($"{leaderIndicator}[bold]{m.Name}[/] [grey](Lv.{m.Level} {m.EffectiveClass})[/]");
+            cards.Add(panel);
+        }
+        AnsiConsole.Write(new Columns(cards));
+        AnsiConsole.WriteLine();
+
+        // Controls/context hints
+        var actions = BuildContextActionsString(map, leader);
+        AnsiConsole.MarkupLine("[bold yellow]Controls:[/] " + actions);
+
+        // Log (collapsible)
+        int rows = _logExpanded ? Math.Min(_config.LogMaxExpandedRows, _log.Count) : Math.Min(1, _log.Count);
+        if (rows > 0)
+        {
+            var toShow = _log.Skip(Math.Max(0, _log.Count - rows)).ToList();
+            foreach (var line in toShow)
+                AnsiConsole.MarkupLine("[grey]-[/] " + line);
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[grey]Press [yellow]H[/] for help. Toggle log with [grey]L[/].[/]");
+        }
     }
 }
