@@ -5,6 +5,7 @@ using Fub.Enums;
 using Fub.Implementations.Map;
 using Fub.Interfaces.Generation;
 using Fub.Interfaces.Map;
+using Fub.Implementations.Map.Objects; // Added for MapPortalObject
 
 namespace Fub.Implementations.Generation;
 
@@ -18,7 +19,7 @@ public sealed class EnhancedMapGenerator : IMapGenerator
     {
         var rng = new System.Random(seed.Value);
         
-        return config.Theme switch
+        var map = config.Theme switch
         {
             MapTheme.City => GenerateCity(config, rng),
             MapTheme.Dungeon => GenerateDungeon(config, rng),
@@ -27,6 +28,10 @@ public sealed class EnhancedMapGenerator : IMapGenerator
             MapTheme.Desert => GenerateDesert(config, rng),
             _ => GenerateGeneric(config, rng)
         };
+
+        // Place default portals to ensure connectivity
+        PlaceDefaultPortals((GameMap)map, rng);
+        return map;
     }
 
     private IMap GenerateCity(IMapGenerationConfig config, System.Random rng)
@@ -403,5 +408,28 @@ public sealed class EnhancedMapGenerator : IMapGenerator
                     if (tiles[x + dx, y + dy])
                         count++;
         return count;
+    }
+
+    // Added: place two exits on floor tiles far apart
+    private static void PlaceDefaultPortals(GameMap map, System.Random rng)
+    {
+        var floors = new List<(int x, int y)>();
+        for (int y = 0; y < map.Height; y++)
+            for (int x = 0; x < map.Width; x++)
+                if (map.GetTile(x, y).TileType == MapTileType.Floor)
+                    floors.Add((x, y));
+
+        if (floors.Count < 2) return;
+
+        // Pick one near top-left and one near bottom-right to maximize separation
+        var a = floors
+            .OrderBy(p => p.x + p.y)
+            .First();
+        var b = floors
+            .OrderByDescending(p => p.x + p.y)
+            .First();
+
+        map.AddObject(new MapPortalObject("Exit-A", a.x, a.y));
+        map.AddObject(new MapPortalObject("Exit-B", b.x, b.y));
     }
 }

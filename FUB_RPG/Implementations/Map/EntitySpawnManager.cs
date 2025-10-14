@@ -6,6 +6,7 @@ using Fub.Interfaces.Actors;
 using Fub.Interfaces.Map;
 using Fub.Interfaces.Random;
 using Fub.Implementations.Actors;
+using Fub.Implementations.Map.Objects; // Added for specialized map objects
 
 namespace Fub.Implementations.Map;
 
@@ -157,6 +158,78 @@ public class EntitySpawnManager
     }
 
     /// <summary>
+    /// Spawns a difficulty-aware encounter group near a center coordinate.
+    /// Returns the spawned monsters.
+    /// </summary>
+    public List<IMonster> SpawnEncounterAt(int centerX, int centerY, Func<int, int, IMonster> enemyFactory, int partyAverageLevel, int partySize, Difficulty difficulty)
+    {
+        var results = new List<IMonster>();
+        // Derive a System.Random from our random source for EnemyScaler API compatibility
+        var sysRand = new System.Random(_random.CurrentSeed ^ Guid.NewGuid().GetHashCode());
+        int desiredCount = EnemyScaler.GetEnemyCount(partySize, difficulty, sysRand);
+
+        // Clamp by map capacity
+        int canSpawn = Math.Max(0, MaxEnemiesOnMap - CountEnemiesOnMap());
+        desiredCount = Math.Min(desiredCount, canSpawn);
+        if (desiredCount <= 0) return results;
+
+        // Find nearby candidate tiles in expanding rings
+        var candidates = GatherNearbySpawnTiles(centerX, centerY, 8);
+        int placed = 0;
+        int idx = 0;
+        int level = EnemyScaler.GetScaledEnemyLevel(partyAverageLevel, partySize, difficulty);
+
+        while (placed < desiredCount && idx < candidates.Count)
+        {
+            var (x, y) = candidates[idx++];
+            if (!IsCellAvailableForSpawn(x, y)) continue;
+
+            var enemy = enemyFactory(x, y);
+            if (enemy == null) continue;
+            EnemyScaler.ScaleEnemy(enemy, level, difficulty);
+
+            // Prefer specialized enemy map object if available
+            IMapObject enemyObj;
+            try
+            {
+                enemyObj = new MapEnemyObject(enemy.Name, enemy, x, y);
+            }
+            catch
+            {
+                enemyObj = new MapObject(MapObjectKind.Enemy, x, y, null, enemy);
+            }
+            _map.AddObject(enemyObj);
+
+            // Roaming by default, small radius around spawn
+            CreateMovementController(enemy, MovementBehavior.Roaming, _random.NextInt(3, 7));
+
+            results.Add(enemy);
+            placed++;
+        }
+
+        return results;
+    }
+
+    private List<(int x, int y)> GatherNearbySpawnTiles(int cx, int cy, int maxRadius)
+    {
+        var list = new List<(int x, int y)>();
+        for (int r = 0; r <= maxRadius; r++)
+        {
+            for (int dx = -r; dx <= r; dx++)
+            {
+                int dy1 = r - Math.Abs(dx);
+                int dy2 = -dy1;
+                int x1 = cx + dx, y1 = cy + dy1;
+                int x2 = cx + dx, y2 = cy + dy2;
+                if (_map.InBounds(x1, y1)) list.Add((x1, y1));
+                if (dy1 != 0 && _map.InBounds(x2, y2)) list.Add((x2, y2));
+            }
+        }
+        // Deduplicate and keep within bounds
+        return list.Distinct().ToList();
+    }
+
+    /// <summary>
     /// Checks if a cell can have an enemy spawned (enemies can overlap with items/chests)
     /// </summary>
     private bool IsCellAvailableForSpawn(int x, int y)
@@ -229,7 +302,17 @@ public class EntitySpawnManager
     /// </summary>
     public void RemoveDeadEnemy(Guid enemyId)
     {
-        _map.RemoveObject(enemyId);
+        // Try as map object id
+        bool removed = _map.RemoveObject(enemyId);
+        if (!removed)
+        {
+            // Try locate by actor id
+            var obj = _map.Objects.FirstOrDefault(o => o.Actor != null && o.Actor.Id == enemyId);
+            if (obj != null)
+            {
+                _map.RemoveObject(obj.Id);
+            }
+        }
         _movementControllers.Remove(enemyId);
     }
 

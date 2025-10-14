@@ -4,6 +4,7 @@ using Fub.Interfaces.Actors;
 using Fub.Interfaces.Items.Equipment;
 using Fub.Interfaces.Random;
 using Fub.Implementations.Combat;
+using Fub.Implementations.Items; // Added for ItemCatalog
 
 namespace Fub.Implementations.Loot;
 
@@ -20,6 +21,7 @@ public class AdvancedLootGenerator
     {
         _random = random ?? throw new ArgumentNullException(nameof(random));
         InitializeDefaultConfigurations();
+        RegisterDefaultItems(); // Added: ensure item DB has content by default
     }
 
     public void AddConfiguration(string key, LootConfiguration configuration)
@@ -250,6 +252,24 @@ public class AdvancedLootGenerator
         eliteConfig.RarityWeights[RarityTier.Legendary] = 1f;
         
         RegisterLootConfiguration(eliteConfig);
+    }
+
+    // Added: seed the item database with common items so loot drops always have items
+    private void RegisterDefaultItems()
+    {
+        // Register consumables
+        foreach (var item in ItemCatalog.GetAllConsumables())
+        {
+            RegisterItem(item);
+        }
+        
+        // Register basic materials and monster parts
+        foreach (var item in ItemCatalog.GetAllMaterials())
+        {
+            RegisterItem(item);
+        }
+        
+        // Optionally: weapons/armors can be large; register a light subset later if needed
     }
 
     private double CalculateLevelScale(LootConfiguration config, int enemyLevel, int playerLevel)

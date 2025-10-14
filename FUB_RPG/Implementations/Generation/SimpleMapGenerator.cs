@@ -6,6 +6,7 @@ using Fub.Implementations.Map;
 using Fub.Interfaces.Generation;
 using Fub.Interfaces.Map;
 using Fub.Interfaces.Random;
+using Fub.Implementations.Map.Objects; // Added for MapPortalObject
 
 namespace Fub.Implementations.Generation;
 
@@ -57,6 +58,9 @@ public sealed class SimpleMapGenerator : IMapGenerator
             prev.Connect(cur);
         }
 
+        // Place default portals/exits to ensure connectivity to other maps
+        PlaceDefaultPortals(map, rng);
+
         // Start room becomes RoomType.Start
         if (rooms.Count > 0)
         {
@@ -105,5 +109,26 @@ public sealed class SimpleMapGenerator : IMapGenerator
             if (cfg.CorridorCarveChance >= 1.0 || new System.Random().NextDouble() < cfg.CorridorCarveChance)
                 map.SetTile(x, y, MapTileType.Floor);
         }
+    }
+
+    // Added: find two far-apart floor tiles and place two exits
+    private static void PlaceDefaultPortals(GameMap map, System.Random rng)
+    {
+        var floors = new List<(int x, int y)>();
+        for (int y = 0; y < map.Height; y++)
+            for (int x = 0; x < map.Width; x++)
+                if (map.GetTile(x, y).TileType == MapTileType.Floor)
+                    floors.Add((x, y));
+
+        if (floors.Count < 2) return;
+
+        var a = floors[rng.Next(floors.Count)];
+        // pick b far from a
+        var b = floors
+            .OrderByDescending(p => Math.Abs(p.x - a.x) + Math.Abs(p.y - a.y))
+            .First();
+
+        map.AddObject(new MapPortalObject("Exit-A", a.x, a.y));
+        map.AddObject(new MapPortalObject("Exit-B", b.x, b.y));
     }
 }

@@ -8,6 +8,8 @@ using Fub.Interfaces.Parties;
 using Fub.Interfaces.Random;
 using Fub.Implementations.Actors;
 using Fub.Implementations.Map;
+using Fub.Implementations.Loot; // Added
+using Fub.Implementations.Map.Objects; // Added for MapItemObject
 
 namespace Fub.Implementations.Game;
 
@@ -22,6 +24,7 @@ public class LivingWorldManager
     private readonly EntitySpawnManager _spawnManager;
     private readonly Pathfinder _pathfinder;
     private readonly Difficulty _difficulty;
+    private readonly AdvancedLootGenerator _lootGenerator; // Added
     
     private float _accumulatedTime;
     private const float UpdateInterval = 0.5f; // Update AI every 0.5 seconds
@@ -35,6 +38,7 @@ public class LivingWorldManager
         
         _spawnManager = new EntitySpawnManager(map, random);
         _pathfinder = new Pathfinder(map.Width, map.Height, IsWalkable);
+        _lootGenerator = new AdvancedLootGenerator(random); // Added
     }
 
     /// <summary>
@@ -195,11 +199,59 @@ public class LivingWorldManager
     }
 
     /// <summary>
-    /// Handles enemy death and respawning
+    /// Handles enemy death: generate loot, drop items on the map, and remove enemy
     /// </summary>
-    public void OnEnemyDefeated(Guid enemyId)
+    public void OnEnemyDefeated(Guid enemyOrObjectId)
     {
-        _spawnManager.RemoveDeadEnemy(enemyId);
+        // Locate map object by object id or by actor id
+        var obj = _map.Objects.FirstOrDefault(o => o.Id == enemyOrObjectId);
+        if (obj == null)
+        {
+            obj = _map.Objects.FirstOrDefault(o => o.Actor != null && o.Actor.Id == enemyOrObjectId);
+        }
+
+        if (obj == null)
+        {
+            // Fallback: still try to remove via spawn manager for legacy callers
+            _spawnManager.RemoveDeadEnemy(enemyOrObjectId);
+            return;
+        }
+
+        var actor = obj.Actor as IMonster;
+        int dropX = obj.X;
+        int dropY = obj.Y;
+
+        // Generate and place loot if this was a monster
+        if (actor != null)
+        {
+            var partyClasses = _party.Members.Select(m => m.EffectiveClass).ToList();
+            var avgLevel = GetPartyAverageLevel();
+            var loot = _lootGenerator.GenerateEnemyLoot(actor, avgLevel, partyClasses);
+
+            // Drop each item as a separate map item object at the enemy's location
+            foreach (var stack in loot.Items)
+            {
+                for (int i = 0; i < Math.Max(1, stack.Quantity); i++)
+                {
+                    var mapItem = new MapItemObject(stack.Item.Name, stack.Item, dropX, dropY);
+                    _map.AddObject(mapItem);
+                }
+            }
+        }
+
+        // Remove the map object and its movement controller
+        _map.RemoveObject(obj.Id);
+        _spawnManager.RemoveDeadEnemy(obj.Actor?.Id ?? enemyOrObjectId);
+    }
+
+    /// <summary>
+    /// Spawns an encounter near a coordinate using party settings; returns spawned monsters.
+    /// </summary>
+    public List<IMonster> SpawnEncounterNear(int centerX, int centerY, Func<int, int, IMonster> enemyFactory)
+    {
+        var partySize = _party.Members.Count;
+        var avgLevel = GetPartyAverageLevel();
+        return _spawnManager.SpawnEncounterAt(centerX, centerY, enemyFactory, avgLevel, partySize, _difficulty);
     }
 
     /// <summary>
