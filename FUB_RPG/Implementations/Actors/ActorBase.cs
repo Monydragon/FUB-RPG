@@ -117,6 +117,13 @@ public abstract class ActorBase : EntityBase, IActor, IHasAbilityBook
         return true;
     }
 
+    // Allow unequip from a slot
+    public bool TryUnequip(EquipmentSlot slot, out IEquipment? removed)
+    {
+        removed = EquipmentManager.Unequip(slot);
+        return removed != null;
+    }
+
     public void SetMovementValidator(Func<int,int,bool> validator) => _canMove = validator;
 
     public bool TryMove(int dx, int dy)

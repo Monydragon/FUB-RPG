@@ -93,7 +93,7 @@ public sealed class EnhancedMapGenerator : IMapGenerator
 
     private IMap GenerateDungeon(IMapGenerationConfig config, System.Random rng)
     {
-        var map = new GameMap($"Dungeon-{rng.Next(1000, 9999)}", config.Theme, config.Width, config.Height, config.Kind);
+        var map = new GameMap($"{GenerateDungeonName(rng)}", config.Theme, config.Width, config.Height, config.Kind);
         var rooms = new List<Room>();
         
         int roomCount = rng.Next(5, 15); // Use hardcoded range since MinRooms/MaxRooms not in interface
@@ -147,7 +147,7 @@ public sealed class EnhancedMapGenerator : IMapGenerator
 
     private IMap GenerateForest(IMapGenerationConfig config, System.Random rng)
     {
-        var map = new GameMap($"Forest-{rng.Next(1000, 9999)}", config.Theme, config.Width, config.Height, config.Kind);
+        var map = new GameMap($"{GenerateForestName(rng)}", config.Theme, config.Width, config.Height, config.Kind);
         
         // Use organic cellular automata for forest clearings
         var tiles = new bool[config.Width, config.Height];
@@ -197,7 +197,7 @@ public sealed class EnhancedMapGenerator : IMapGenerator
 
     private IMap GenerateCave(IMapGenerationConfig config, System.Random rng)
     {
-        var map = new GameMap($"Cave-{rng.Next(1000, 9999)}", config.Theme, config.Width, config.Height, config.Kind);
+        var map = new GameMap($"{GenerateCaveName(rng)}", config.Theme, config.Width, config.Height, config.Kind);
         
         // Cellular automata for organic cave structure
         var tiles = new bool[config.Width, config.Height];
@@ -265,7 +265,7 @@ public sealed class EnhancedMapGenerator : IMapGenerator
 
     private IMap GenerateDesert(IMapGenerationConfig config, System.Random rng)
     {
-        var map = new GameMap($"Desert-{rng.Next(1000, 9999)}", config.Theme, config.Width, config.Height, config.Kind);
+        var map = new GameMap($"{GenerateDesertName(rng)}", config.Theme, config.Width, config.Height, config.Kind);
         
         // Wide open spaces with occasional rocky outcrops
         for (int x = 0; x < config.Width; x++)
@@ -494,5 +494,34 @@ public sealed class EnhancedMapGenerator : IMapGenerator
         string m = rng.NextDouble() < 0.6 ? middles[rng.Next(middles.Length)] : string.Empty;
         string e = ends[rng.Next(ends.Length)];
         return s + m + e;
+    }
+
+    // New: simple themed name generators for other map types
+    private static string GenerateDungeonName(System.Random rng)
+    {
+        string[] a = { "Shadow", "Gloom", "Iron", "Ash", "Blood", "Night", "Grim", "Bone", "Cinder", "Dread", "Fell", "Dire", "Hex" };
+        string[] n = { "Depths", "Keep", "Halls", "Catacombs", "Crypt", "Labyrinth", "Vault", "Pit", "Sanctum", "Stronghold", "Citadel" };
+        return $"{a[rng.Next(a.Length)]} {n[rng.Next(n.Length)]}";
+    }
+
+    private static string GenerateForestName(System.Random rng)
+    {
+        string[] a = { "Whispering", "Emerald", "Silver", "Amber", "Misty", "Verdant", "Ancient", "Starlit", "Blooming", "Fey" };
+        string[] n = { "Woods", "Grove", "Thicket", "Glade", "Wilds", "Timberland", "Copse", "Woodland" };
+        return $"The {a[rng.Next(a.Length)]} {n[rng.Next(n.Length)]}";
+    }
+
+    private static string GenerateCaveName(System.Random rng)
+    {
+        string[] a = { "Echoing", "Crystal", "Black", "Twisting", "Sunken", "Frost", "Sulfur", "Moonlit" };
+        string[] n = { "Caverns", "Grotto", "Hollow", "Chasm", "Tunnels", "Burrows" };
+        return $"{a[rng.Next(a.Length)]} {n[rng.Next(n.Length)]}";
+    }
+
+    private static string GenerateDesertName(System.Random rng)
+    {
+        string[] a = { "Golden", "Scorched", "Shifting", "Silent", "Endless", "Burning", "Dune", "Saharan" };
+        string[] n = { "Sands", "Expanse", "Wastes", "Sea", "Dunes", "Badlands" };
+        return $"The {a[rng.Next(a.Length)]} {n[rng.Next(n.Length)]}";
     }
 }

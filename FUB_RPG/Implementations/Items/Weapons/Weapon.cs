@@ -4,10 +4,11 @@ using System.Linq;
 using Fub.Enums;
 using Fub.Implementations.Items;
 using Fub.Interfaces.Items.Equipment;
+using Fub.Interfaces.Items.Weapons;
 
 namespace Fub.Implementations.Items.Weapons;
 
-public sealed class Weapon : ItemBase, IEquipment
+public sealed class Weapon : ItemBase, IEquipment, IWeapon
 {
     private static readonly System.Random s_rng = new System.Random();
     
@@ -21,6 +22,10 @@ public sealed class Weapon : ItemBase, IEquipment
     public double MinDamage { get; }
     public double MaxDamage { get; }
     public double Speed { get; }
+    
+    // IWeapon aliases
+    public double AttackSpeed => Speed;
+    public DamageType DefaultDamageType => DamageType;
 
     // Constructor for tier-based equipment generation (my new system)
     public Weapon(
