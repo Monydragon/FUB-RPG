@@ -107,7 +107,7 @@ public class VictoryScreenManager
             output.AppendLine("=== ITEMS FOUND ===");
             var itemGroups = victoryData.TotalLoot.Items
                 .GroupBy(stack => stack.Item.Rarity)
-                .OrderBy(group => group.Key);
+                 .OrderBy(group => group.Key);
                 
             foreach (var rarityGroup in itemGroups)
             {
