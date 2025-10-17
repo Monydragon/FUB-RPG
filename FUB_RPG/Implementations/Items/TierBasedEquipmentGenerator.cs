@@ -30,7 +30,13 @@ public class TierBasedEquipmentGenerator
     /// </summary>
     public Dictionary<EquipmentSlot, IEquipment> GenerateCompleteSet(ActorClass actorClass, EquipmentTier tier)
     {
-        var template = _classTemplates[actorClass];
+        // Use a safe template: explicit if provided, or a sensible fallback derived from mappings
+        if (!_classTemplates.TryGetValue(actorClass, out var template))
+        {
+            template = BuildFallbackTemplate(actorClass);
+            _classTemplates[actorClass] = template; // cache so we don't rebuild repeatedly
+        }
+
         var equipmentSet = new Dictionary<EquipmentSlot, IEquipment>();
         var tierLevel = GetTierBaseLevel(tier);
 
@@ -261,31 +267,121 @@ public class TierBasedEquipmentGenerator
 
     private string GetClassPrefix(ActorClass actorClass) => actorClass switch
     {
+        // General
+        ActorClass.Adventurer => "Adventurer's",
+
+        // Combat - Melee
         ActorClass.Warrior => "Warrior's",
-        ActorClass.Wizard => "Wizard's",
-        ActorClass.Rogue => "Rogue's",
         ActorClass.Cleric => "Cleric's",
-        ActorClass.Ranger => "Ranger's",
         ActorClass.Paladin => "Paladin's",
+        ActorClass.DarkKnight => "Dark Knight's",
+        ActorClass.Gunbreaker => "Gunbreaker's",
         ActorClass.Barbarian => "Barbarian's",
+        ActorClass.Monk => "Monk's",
+        ActorClass.Samurai => "Samurai's",
+        ActorClass.Dragoon => "Dragoon's",
+        ActorClass.Ninja => "Ninja's",
+        ActorClass.Reaper => "Reaper's",
+        ActorClass.Rogue => "Rogue's",
+
+        // Combat - Ranged
+        ActorClass.Ranger => "Ranger's",
+        ActorClass.Hunter => "Hunter's",
+        ActorClass.Machinist => "Machinist's",
+        ActorClass.Dancer => "Dancer's",
+        ActorClass.Bard => "Bard's",
+
+        // Combat - Magic / Support
+        ActorClass.Druid => "Druid's",
+        ActorClass.Wizard => "Wizard's",
         ActorClass.Sorcerer => "Sorcerer's",
         ActorClass.Warlock => "Warlock's",
-        ActorClass.Bard => "Bard's",
+        ActorClass.BlackMage => "Black Mage's",
+        ActorClass.WhiteMage => "White Mage's",
+        ActorClass.Scholar => "Scholar's",
+        ActorClass.Astrologian => "Astrologian's",
+        ActorClass.Sage => "Sage's",
+        ActorClass.RedMage => "Red Mage's",
+        ActorClass.BlueMage => "Blue Mage's",
+        ActorClass.Summoner => "Summoner's",
+        ActorClass.Necromancer => "Necromancer's",
+        ActorClass.Artificer => "Artificer's",
+
+        // Crafting (Disciples of the Hand)
+        ActorClass.Carpenter => "Carpenter's",
+        ActorClass.Blacksmith => "Blacksmith's",
+        ActorClass.Armorer => "Armorer's",
+        ActorClass.Goldsmith => "Goldsmith's",
+        ActorClass.Leatherworker => "Leatherworker's",
+        ActorClass.Weaver => "Weaver's",
+        ActorClass.Alchemist => "Alchemist's",
+        ActorClass.Culinarian => "Culinarian's",
+
+        // Gathering (Disciples of the Land)
+        ActorClass.Miner => "Miner's",
+        ActorClass.Botanist => "Botanist's",
+        ActorClass.Fisher => "Fisher's",
+
         _ => "Adventurer's"
     };
 
     private string GetWeaponBaseName(WeaponType weaponType) => weaponType switch
     {
+        // General
+        WeaponType.Toolkit => "Toolkit",
+
+        // Melee
         WeaponType.Sword => "Sword",
-        WeaponType.Greataxe => "Greataxe",
         WeaponType.Mace => "Mace",
-        WeaponType.Dagger => "Dagger",
-        WeaponType.Bow => "Bow",
-        WeaponType.Staff => "Staff",
-        WeaponType.Wand => "Wand",
-        WeaponType.Crossbow => "Crossbow",
+        WeaponType.HolySword => "Holy Sword",
+        WeaponType.Greatsword => "Greatsword",
+        WeaponType.Gunblade => "Gunblade",
+        WeaponType.Greataxe => "Greataxe",
+        WeaponType.Handwraps => "Handwraps",
+        WeaponType.Katana => "Katana",
         WeaponType.Spear => "Spear",
+        WeaponType.Kunai => "Kunai",
+        WeaponType.Scythe => "Scythe",
+        WeaponType.Dagger => "Dagger",
+        WeaponType.Scimitar => "Scimitar",
+
+        // Ranged
+        WeaponType.Bow => "Bow",
+        WeaponType.Crossbow => "Crossbow",
+        WeaponType.Firearm => "Firearm",
+        WeaponType.Chakrams => "Chakrams",
+        WeaponType.Lute => "Lute",
+
+        // Magic / Support
+        WeaponType.Wand => "Wand",
+        WeaponType.Orb => "Orb",
+        WeaponType.PactTome => "Pact Tome",
+        WeaponType.Rod => "Rod",
+        WeaponType.Staff => "Staff",
+        WeaponType.Rapier => "Rapier",
+        WeaponType.Cane => "Cane",
+        WeaponType.Grimoire => "Grimoire",
+        WeaponType.Codex => "Codex",
+        WeaponType.Astrolabe => "Astrolabe",
+        WeaponType.Nouliths => "Nouliths",
+        WeaponType.Focus => "Focus",
+        WeaponType.MultiTool => "Multi-Tool",
+
+        // Crafting (DoH)
+        WeaponType.Saw => "Saw",
         WeaponType.Hammer => "Hammer",
+         WeaponType.RaisingHammer => "Raising Hammer",
+        WeaponType.ChasingHammer => "Chasing Hammer",
+        WeaponType.HeadKnife => "Head Knife",
+        WeaponType.Needle => "Needle",
+        WeaponType.Alembic => "Alembic",
+        WeaponType.Skillet => "Skillet",
+
+        // Gathering (DoL)
+        WeaponType.Pickaxe => "Pickaxe",
+        WeaponType.Hatchet => "Hatchet",
+        WeaponType.FishingRod => "Fishing Rod",
+
         _ => "Weapon"
     };
 
@@ -366,6 +462,57 @@ public class TierBasedEquipmentGenerator
             PreferredArmorTypes = new List<ArmorType> { ArmorType.Leather, ArmorType.Mail },
             UsesShield = false,
             UsesDualWield = true
+        };
+    }
+
+    private ClassEquipmentTemplate BuildFallbackTemplate(ActorClass actorClass)
+    {
+        // Derive a reasonable template from class->weapon mapping and weapon category
+        WeaponType primaryWeapon;
+        try
+        {
+            primaryWeapon = ClassWeaponMappings.GetWeaponTypeForClass(actorClass);
+        }
+        catch
+        {
+            // Unknown class mapping: default to Sword
+            primaryWeapon = WeaponType.Sword;
+        }
+
+        var preferredWeapons = new List<WeaponType> { primaryWeapon };
+
+        // Heuristic for armor type based on weapon/magic orientation
+        var magicWeapons = new HashSet<WeaponType>
+        {
+            WeaponType.Staff, WeaponType.Wand, WeaponType.Rod, WeaponType.Grimoire, WeaponType.Codex,
+            WeaponType.Astrolabe, WeaponType.Nouliths, WeaponType.Orb, WeaponType.Cane, WeaponType.Lute
+        };
+
+        var heavyWeapons = new HashSet<WeaponType>
+        {
+            WeaponType.Greatsword, WeaponType.Greataxe, WeaponType.Hammer, WeaponType.HolySword, WeaponType.Gunblade
+        };
+
+        List<ArmorType> preferredArmor;
+        if (magicWeapons.Contains(primaryWeapon))
+            preferredArmor = new List<ArmorType> { ArmorType.Cloth, ArmorType.Leather };
+        else if (heavyWeapons.Contains(primaryWeapon))
+            preferredArmor = new List<ArmorType> { ArmorType.Plate, ArmorType.Mail };
+        else if (primaryWeapon == WeaponType.Rapier || primaryWeapon == WeaponType.Katana || primaryWeapon == WeaponType.Spear || primaryWeapon == WeaponType.Dagger)
+            preferredArmor = new List<ArmorType> { ArmorType.Leather, ArmorType.Cloth };
+        else
+            preferredArmor = new List<ArmorType> { ArmorType.Leather };
+
+        // Most fallbacks do not assume shields or dual wield
+        var usesShield = heavyWeapons.Contains(primaryWeapon);
+        var usesDual = primaryWeapon == WeaponType.Dagger; // safe minimal guess
+
+        return new ClassEquipmentTemplate
+        {
+            PreferredWeaponTypes = preferredWeapons,
+            PreferredArmorTypes = preferredArmor,
+            UsesShield = usesShield,
+            UsesDualWield = usesDual
         };
     }
 }

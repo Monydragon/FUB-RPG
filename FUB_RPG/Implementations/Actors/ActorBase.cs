@@ -45,6 +45,15 @@ public abstract class ActorBase : EntityBase, IActor, IHasAbilityBook
     public ActorClass EffectiveClass => EvaluateEffectiveClass();
     public IAbilityBook AbilityBook { get; }
 
+    // Allow changing the base class outside of combat flows
+    public void ChangeClass(ActorClass newClass)
+    {
+        if (newClass == Class) return;
+        Class = newClass;
+        // Learn starting abilities for the new class up to current level (duplicates ignored by AbilityBook)
+        LearnStartingAbilities();
+    }
+
     protected ActorBase(string name, Species species, ActorClass @class, int startX, int startY) : base(name)
     {
         Species = species;

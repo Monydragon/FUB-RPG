@@ -69,6 +69,9 @@ public sealed class GameLoop : IGameLoop
     // private const int MinViewportWidth = 15;
     // private const int MinViewportHeight = 10;
 
+    // New: Tier-based equipment generator for auto-equipping best gear
+    private TierBasedEquipmentGenerator _tierGenerator;
+
     public GameLoop(GameState state, IMapGenerator mapGenerator, MapRenderer renderer)
         : this(state, mapGenerator, renderer, new DefaultGameConfig(), new InMemoryItemDatabase()) { }
 
@@ -80,6 +83,7 @@ public sealed class GameLoop : IGameLoop
         _combatResolver = new TurnBasedCombatResolver(_state);
         _config = config;
         _itemDb = itemDb;
+        _tierGenerator = new TierBasedEquipmentGenerator(new RandomSource(Environment.TickCount));
     }
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
@@ -638,6 +642,125 @@ public sealed class GameLoop : IGameLoop
         }
     }
 
+    // Allow changing a member's base class (outside of combat). Automatically equips best available gear.
+    private void ShowChangeClassMenu()
+    {
+        var members = _state.Party.Members.ToList();
+        if (members.Count == 0) return;
+        var who = PromptNavigator.PromptChoice("Change class for who?", members.Select(m => m.Name).Append("Back").ToList(), _state);
+        if (who == "Back") return;
+        var actor = members.First(m => m.Name == who) as ActorBase;
+        if (actor is null) return;
+
+        var all = Enum.GetValues<ActorClass>().ToList();
+        var pick = PromptNavigator.PromptChoice($"Select new class for {actor.Name}:", all, _state);
+        if (pick == actor.Class)
+        {
+            AnsiConsole.MarkupLine("[grey]No change.[/]");
+            InputWaiter.WaitForAny(_state.InputMode);
+            return;
+        }
+
+        actor.ChangeClass(pick);
+
+        // Remove gear not valid for new class
+        foreach (EquipmentSlot slot in Enum.GetValues<EquipmentSlot>())
+        {
+            var eq = actor.GetEquipped(slot);
+            if (eq == null) continue;
+            if (eq.AllowedClasses.Any() && !eq.AllowedClasses.Contains(pick))
+            {
+                if (actor.TryUnequip(slot, out var removed) && removed != null)
+                {
+                    if (!actor.Inventory.TryAdd(removed, 1)) AddLog($"No space for {removed.Name}. It was dropped.");
+                }
+            }
+        }
+
+        // Equip best available items for the new class (generate missing pieces to avoid empty slots)
+        AutoEquipBestForClass(actor, generateMissing: true);
+
+        AnsiConsole.MarkupLine($"[green]{actor.Name} is now a {pick} with optimized equipment.[/]");
+        AnsiConsole.MarkupLine("[grey]Press any key to continue...[/]");
+        InputWaiter.WaitForAny(_state.InputMode);
+    }
+
+    // Choose the best gear for each slot for the actor's current class/level. Optionally generate tier-matched items when inventory lacks one.
+    private void AutoEquipBestForClass(ActorBase actor, bool generateMissing)
+    {
+        var desiredTier = TierBasedEquipmentGenerator.GetTierForLevel(actor.Level);
+        var invEquip = actor.Inventory.Slots
+            .Where(s => s.Item is IEquipment)
+            .Select(s => (IEquipment)s.Item!)
+            .Where(e => e.RequiredLevel <= actor.Level && (!e.AllowedClasses.Any() || e.AllowedClasses.Contains(actor.Class)))
+            .ToList();
+        var bySlot = invEquip.GroupBy(e => e.Slot).ToDictionary(g => g.Key, g => g.ToList());
+
+        foreach (EquipmentSlot slot in Enum.GetValues<EquipmentSlot>())
+        {
+            IEquipment? best = null;
+            if (bySlot.TryGetValue(slot, out var list) && list.Count > 0)
+            {
+                best = list
+                    .OrderByDescending(e => (int)e.Tier)
+                    .ThenByDescending(e => e.Rarity)
+                    .ThenByDescending(e => e.BaseValue)
+                    .FirstOrDefault();
+            }
+            if (best == null && generateMissing)
+            {
+                var set = _tierGenerator.GenerateCompleteSet(actor.Class, desiredTier);
+                if (set.TryGetValue(slot, out var gen)) best = gen;
+            }
+            if (best != null)
+            {
+                if (actor.TryEquip(best, out var replaced))
+                {
+                    // If best came from inventory, remove it
+                    actor.Inventory.TryRemove(best.Id, 1);
+                    if (replaced != null && !actor.Inventory.TryAdd(replaced, 1))
+                        AddLog($"No space for {replaced.Name}. It was dropped.");
+                }
+            }
+        }
+    }
+
+    // Ensure that main-hand weapon meets the tier for the current level; auto-upgrade at level 10/20/.../100.
+    private void EnsureWeaponTierForLevel(ActorBase actor)
+    {
+        var desired = TierBasedEquipmentGenerator.GetTierForLevel(actor.Level);
+        var current = actor.GetEquipped(EquipmentSlot.MainHand) as IEquipment;
+        if (current != null && (int)current.Tier >= (int)desired) return;
+
+        // Prefer inventory weapons that satisfy the desired tier
+        var candidates = actor.Inventory.Slots
+            .Where(s => s.Item is IEquipment eq && eq.Slot == EquipmentSlot.MainHand)
+            .Select(s => (IEquipment)s.Item!)
+            .Where(e => e.RequiredLevel <= actor.Level && (!e.AllowedClasses.Any() || e.AllowedClasses.Contains(actor.Class)))
+            .OrderByDescending(e => (int)e.Tier)
+            .ThenByDescending(e => e.Rarity)
+            .ThenByDescending(e => e.BaseValue)
+            .ToList();
+
+        IEquipment? best = candidates.FirstOrDefault(e => (int)e.Tier >= (int)desired) ?? candidates.FirstOrDefault();
+        if (best == null)
+        {
+            var set = _tierGenerator.GenerateCompleteSet(actor.Class, desired);
+            set.TryGetValue(EquipmentSlot.MainHand, out best);
+        }
+
+        if (best != null)
+        {
+            if (actor.TryEquip(best, out var replaced))
+            {
+                actor.Inventory.TryRemove(best.Id, 1);
+                if (replaced != null && !actor.Inventory.TryAdd(replaced, 1))
+                    AddLog($"No space for {replaced.Name}. It was dropped.");
+                AddLog($"{actor.Name}'s weapon has been upgraded to {desired}.");
+            }
+        }
+    }
+
     private void ShowVictoryResults(ICombatSession session, List<IActor> enemyActors, Dictionary<Guid,int> preLevels)
     {
         // Compute total EXP from enemies
@@ -755,6 +878,15 @@ public sealed class GameLoop : IGameLoop
         AnsiConsole.WriteLine();
         AddLog("Victory!");
 
+        // Auto-upgrade each ally's weapon if they crossed a tier threshold
+        foreach (var ally in _state.Party.Members)
+        {
+            if (ally is ActorBase ab)
+            {
+                EnsureWeaponTierForLevel(ab);
+            }
+        }
+
         _uiInitialized = false; // ensure next explore frame redraws
     }
 
@@ -816,12 +948,20 @@ public sealed class GameLoop : IGameLoop
         AnsiConsole.MarkupLine($"[bold]Party[/] | [yellow]Leader: ★ {Markup.Escape(leaderName)}[/] | [yellow]Members: {_state.Party.Members.Count}/4[/] | [yellow]Gold: {_state.Party.Gold}g[/] | [cyan]Steps: {_state.Steps}[/]");
 
         // Create horizontal grid for all party members in one row
-        var grid = new Grid();
+        var grid = new Grid().Expand();
         // Add one column per party member (up to 4)
         for (int i = 0; i < _state.Party.Members.Count; i++)
         {
             grid.AddColumn(new GridColumn().NoWrap().PadRight(1));
         }
+
+        // Compute dynamic widths so panels/bars expand with console size
+        int memberCount = Math.Max(1, _state.Party.Members.Count);
+        int totalPadding = Math.Max(0, memberCount - 1); // grid PadRight(1) per col
+        int availableForPanels = Math.Max(40, Console.WindowWidth - 2 - totalPadding);
+        int perPanelWidth = Math.Max(26, availableForPanels / memberCount);
+        // Bar width budget: subtract label/value cosmetics (~14 chars) and clamp
+        int barWidth = Math.Clamp(perPanelWidth - 14, 14, 60);
 
         // Build panels for each member
         var panels = new List<IRenderable>();
@@ -831,10 +971,14 @@ public sealed class GameLoop : IGameLoop
             var mp = m.GetStat(StatType.Mana);
             var tp = m.GetStat(StatType.Technical);
 
-            // Bars with consistent width
-            int barWidth = 20;
+            // Resource label lines (stylized) and bars with dynamic width
+            string hpHeader = ResourceHeader("HP", hp.Current, hp.Modified, "red");
             var hpLine = Bar("HP", hp.Current, hp.Modified, barWidth, "red");
+
+            string mpHeader = ResourceHeader("MP", mp.Current, mp.Modified, "deepskyblue1");
             var mpLine = Bar("MP", mp.Current, mp.Modified, barWidth, "deepskyblue1");
+
+            string tpHeader = ResourceHeader("TP", tp.Current, tp.Modified, "yellow1");
             var tpLine = Bar("TP", tp.Current, tp.Modified, barWidth, "yellow1");
 
             // Calculate EXP bar for current level progress
@@ -845,25 +989,50 @@ public sealed class GameLoop : IGameLoop
             var xpForNextLevel = xpCalc.GetExperienceForLevel(currentLevel + 1, LevelCurveType.Moderate);
             var xpIntoCurrentLevel = currentExp - xpForCurrentLevel;
             var xpNeededForLevel = xpForNextLevel - xpForCurrentLevel;
+            string expHeader = ResourceHeader("EXP", xpIntoCurrentLevel, xpNeededForLevel, "green");
             var expLine = Bar("EXP", xpIntoCurrentLevel, xpNeededForLevel, barWidth, "green");
+
+            // Prominent Level/Class line (inside body so it won't get truncated like headers can)
+            string levelClassLine = $"[bold yellow]Lv {m.Level}[/]  [bold cyan]{Markup.Escape(m.EffectiveClass.ToString())}[/]";
+
+            // Compact extra stats to use added width (two lines)
+            double str = m.GetStat(StatType.Strength).Modified;
+            double agi = m.GetStat(StatType.Agility).Modified;
+            double intl = m.GetStat(StatType.Intellect).Modified;
+            double vit = m.GetStat(StatType.Vitality).Modified;
+            double atk = m.GetStat(StatType.AttackPower).Modified;
+            double arm = m.GetStat(StatType.Armor).Modified;
+            double crit = m.GetStat(StatType.CritChance).Modified;
+            double spd = m.GetStat(StatType.Speed).Modified;
+            string statLine1 = $"[grey]STR[/]: [white]{str:0}[/]  [grey]AGI[/]: [white]{agi:0}[/]  [grey]INT[/]: [white]{intl:0}[/]  [grey]VIT[/]: [white]{vit:0}[/]";
+            string statLine2 = $"[grey]ATK[/]: [white]{atk:0}[/]  [grey]ARM[/]: [white]{arm:0}[/]  [grey]CRIT[/]: [white]{crit:0}[/]  [grey]SPD[/]: [white]{spd:0}[/]";
 
             // Leader indicator
             bool isLeader = m.Id == _state.Party.Leader.Id;
-            string leaderPrefix = isLeader ? "[yellow]★[/] " : "";
+            string leaderPrefix = isLeader ? "[yellow]\u2605[/] " : "";
 
             // Build the panel content
             var body = new Markup(
+                levelClassLine + "\n" +
+                hpHeader + "\n" +
                 hpLine + "\n" +
+                mpHeader + "\n" +
                 mpLine + "\n" +
+                tpHeader + "\n" +
                 tpLine + "\n" +
-                expLine);
+                expHeader + "\n" +
+                expLine + "\n" +
+                statLine1 + "\n" +
+                statLine2
+            );
 
-            // Header shows name, level, and class with leader indicator
-            var headerTitle = new PanelHeader($"{leaderPrefix}[bold]{Markup.Escape(m.Name)}[/] [grey](Lv.{m.Level} {m.EffectiveClass})[/]");
+            // Header focused on name; Level/Class moved into body for visibility
+            var headerTitle = new PanelHeader($"{leaderPrefix}[bold]{Markup.Escape(m.Name)}[/]");
             var panel = new Panel(body)
                 .RoundedBorder()
                 .Header(headerTitle)
-                .BorderColor(isLeader ? Color.Yellow : Color.Grey);
+                .BorderColor(isLeader ? Color.Yellow : Color.Grey)
+                .Expand();
 
             panels.Add(panel);
         }
@@ -907,17 +1076,29 @@ public sealed class GameLoop : IGameLoop
         catch { /* Ignore if terminal doesn't support positioning */ }
     }
 
-    // Colored bar consistent with battle/results UI
-    private static string Bar(string label, double current, double max, int width, string color)
+    // Colored bar simple renderer (no inline text); label parameter kept for signature compatibility
+    private static string Bar(string label, double current, double max, int width, string barColor)
     {
         max = Math.Max(1.0, max);
         current = Math.Max(0.0, Math.Min(current, max));
+        width = Math.Max(6, width);
         int filled = (int)Math.Round((current / max) * width);
-        int empty = Math.Max(0, width - filled);
-        string fill = new string('\u2588', Math.Max(0, filled));
-        string rest = new string('\u2500', Math.Max(0, empty));
-        string value = $"{current:0}/{max:0}";
-        return $"[{color}]{label}[/]: [{color}]{fill}[/][grey]{rest}[/] [{color}]{value}[/]";
+        filled = Math.Clamp(filled, 0, width);
+        var sb = new System.Text.StringBuilder();
+        // filled segment
+        if (filled > 0) sb.Append('[').Append(barColor).Append(']').Append(new string('\u2588', filled)).Append("[/]");
+        // empty segment
+        int empty = width - filled;
+        if (empty > 0) sb.Append("[grey]").Append(new string('\u2500', empty)).Append("[/]");
+        return sb.ToString();
+    }
+
+    // Stylized resource header: colored label plus value
+    private static string ResourceHeader(string label, double current, double max, string color)
+    {
+        max = Math.Max(1.0, max);
+        current = Math.Max(0.0, current);
+        return $"[{color}][bold]{label}[/]:[/] [white]{current:0}/{max:0}[/]";
     }
 
     private void InspectPartyMember()
@@ -991,12 +1172,13 @@ public sealed class GameLoop : IGameLoop
 
     private void ShowPartyMenu()
     {
-        var choices = new List<string> { "Inspect Member", "View Stats", "Change Leader", "Manage Equipment", "Settings", "Back" };
+        var choices = new List<string> { "Inspect Member", "View Stats", "Change Leader", "Manage Equipment", "Change Class", "Settings", "Back" };
         var choice = PromptNavigator.PromptChoice("[bold cyan]Party Menu[/]", choices, _state);
         if (choice == "Inspect Member") InspectPartyMember();
         else if (choice == "View Stats") ShowPartyStats();
         else if (choice == "Change Leader") ChangeLeader();
         else if (choice == "Manage Equipment") ShowEquipmentMenu();
+        else if (choice == "Change Class") ShowChangeClassMenu();
         else if (choice == "Settings") ShowSettingsMenu();
         _uiInitialized = false; // redraw cleanly
     }
@@ -1075,6 +1257,14 @@ public sealed class GameLoop : IGameLoop
             AnsiConsole.MarkupLine("[bold]" + selected.Name + "[/]");
             AnsiConsole.MarkupLine("Type: " + selected.ItemType);
             AnsiConsole.MarkupLine("Rarity: " + selected.Rarity);
+            if (selected is IEquipment eqi)
+            {
+                AnsiConsole.MarkupLine($"Required Level: {eqi.RequiredLevel}");
+                var cls = (eqi.AllowedClasses?.Any() == true) ? string.Join(", ", eqi.AllowedClasses) : "Any";
+                AnsiConsole.MarkupLine($"Allowed Classes: {Markup.Escape(cls)}");
+                if (eqi.RequirementsOptional)
+                    AnsiConsole.MarkupLine("[grey]Requirements are optional for this item.[/]");
+            }
             if (!string.IsNullOrWhiteSpace(selected.Description))
                 AnsiConsole.MarkupLine(Markup.Escape(selected.Description));
             AnsiConsole.MarkupLine("Press any key to continue...");

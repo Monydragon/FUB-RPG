@@ -9,8 +9,8 @@ public sealed class DefaultGameConfig : IGameConfig
     public int UiReservedVerticalLines { get; init; } = 28;
     public int LogMaxExpandedRows { get; init; } = 8;
     public int LogMaxEntries { get; init; } = 200;
-    public int CellWidthChars { get; init; } = 8; // each cell ~"[xxxxx] "
-    public int MaxViewportWidth { get; init; } = 80;
+    public int CellWidthChars { get; init; } = 8; 
+    public int MaxViewportWidth { get; init; } = 120;
     public int MaxViewportHeight { get; init; } = 35;
     public int MinViewportWidth { get; init; } = 15;
     public int MinViewportHeight { get; init; } = 10;

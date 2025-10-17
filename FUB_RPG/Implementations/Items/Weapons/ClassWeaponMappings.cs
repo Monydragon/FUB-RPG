@@ -26,6 +26,7 @@ public static class ClassWeaponMappings
 
         // Ranged
         { ActorClass.Ranger, WeaponType.Bow },
+        { ActorClass.Hunter, WeaponType.Crossbow },
         { ActorClass.Machinist, WeaponType.Firearm },
         { ActorClass.Dancer, WeaponType.Chakrams },
         { ActorClass.Bard, WeaponType.Lute },
@@ -102,6 +103,7 @@ public static class ClassWeaponMappings
 
             // Ranged
             ActorClass.Ranger => ("Yew Bow", WeaponType.Bow, DamageType.Physical),
+            ActorClass.Hunter => ("Oak Crossbow", WeaponType.Crossbow, DamageType.Physical),
             ActorClass.Machinist => ("Rusty Firearm", WeaponType.Firearm, DamageType.Physical),
             ActorClass.Dancer => ("Bronze Chakrams", WeaponType.Chakrams, DamageType.Physical),
             ActorClass.Bard => ("Wandering Lute", WeaponType.Lute, DamageType.Psychic),

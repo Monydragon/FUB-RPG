@@ -13,4 +13,6 @@ public interface IEquipment : IItem
     IReadOnlyCollection<ActorClass> AllowedClasses { get; }
     IReadOnlyDictionary<StatType, double> StatRequirements { get; }
     EquipmentTier Tier { get; }
+    // Optional requirements: when true, requirements act as guidelines and equipping is allowed even if not met
+    bool RequirementsOptional { get; }
 }

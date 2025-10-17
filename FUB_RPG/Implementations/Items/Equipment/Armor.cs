@@ -15,6 +15,7 @@ public sealed class Armor : ItemBase, IEquipment
 
     public EquipmentTier Tier { get; }
     public ArmorType ArmorType { get; }
+    public bool RequirementsOptional { get; }
 
     public Armor(
         string name,
@@ -24,7 +25,8 @@ public sealed class Armor : ItemBase, IEquipment
         IEnumerable<ActorClass>? allowedClasses = null,
         IReadOnlyDictionary<StatType, double>? statRequirements = null,
         EquipmentTier tier = EquipmentTier.Simple,
-        ArmorType armorType = ArmorType.Leather)
+        ArmorType armorType = ArmorType.Leather,
+        bool requirementsOptional = false)
         : base(name, ItemType.Armor, rarity)
     {
         Slot = slot;
@@ -33,6 +35,7 @@ public sealed class Armor : ItemBase, IEquipment
         StatRequirements = statRequirements ?? new Dictionary<StatType, double>();
         Tier = tier;
         ArmorType = armorType;
+        RequirementsOptional = requirementsOptional;
 
         // Set appropriate base value based on tier and rarity
         BaseValue = CalculateBaseValue(tier, rarity, slot);

@@ -27,6 +27,10 @@ public class EquipmentManager
 
     public bool CanEquip(IEquipment equipment, int actorLevel, ActorClass actorClass)
     {
+        // If requirements are optional, allow equip regardless of unmet gates
+        if (equipment.RequirementsOptional)
+            return true;
+        
         // Check level requirement
         if (actorLevel < equipment.RequiredLevel) return false;
         

@@ -8,7 +8,7 @@ using Fub.Interfaces.Items.Weapons;
 
 namespace Fub.Implementations.Items.Weapons;
 
-public sealed class Weapon : ItemBase, IEquipment, IWeapon
+public sealed class Weapon : ItemBase, IWeapon
 {
     private static readonly System.Random s_rng = new System.Random();
     
@@ -22,6 +22,7 @@ public sealed class Weapon : ItemBase, IEquipment, IWeapon
     public double MinDamage { get; }
     public double MaxDamage { get; }
     public double Speed { get; }
+    public bool RequirementsOptional { get; }
     
     // IWeapon aliases
     public double AttackSpeed => Speed;
@@ -35,7 +36,8 @@ public sealed class Weapon : ItemBase, IEquipment, IWeapon
         int requiredLevel = 1,
         IEnumerable<ActorClass>? allowedClasses = null,
         IReadOnlyDictionary<StatType, double>? statRequirements = null,
-        EquipmentTier tier = EquipmentTier.Simple)
+        EquipmentTier tier = EquipmentTier.Simple,
+        bool requirementsOptional = false)
         : base(name, ItemType.Weapon, rarity)
     {
         WeaponType = weaponType;
@@ -44,6 +46,7 @@ public sealed class Weapon : ItemBase, IEquipment, IWeapon
         AllowedClasses = allowedClasses?.ToList() ?? new List<ActorClass>(System.Enum.GetValues<ActorClass>());
         StatRequirements = statRequirements ?? new Dictionary<StatType, double>();
         Tier = tier;
+        RequirementsOptional = requirementsOptional;
         DamageType = DamageType.Physical; // Default
         
         // Calculate damage and speed based on weapon type and tier
@@ -68,7 +71,8 @@ public sealed class Weapon : ItemBase, IEquipment, IWeapon
         int requiredLevel = 1,
         IEnumerable<ActorClass>? allowedClasses = null,
         IReadOnlyDictionary<StatType, double>? statRequirements = null,
-        EquipmentTier tier = EquipmentTier.Simple)
+        EquipmentTier tier = EquipmentTier.Simple,
+        bool requirementsOptional = false)
         : base(name, ItemType.Weapon, rarity)
     {
         WeaponType = weaponType;
@@ -81,6 +85,7 @@ public sealed class Weapon : ItemBase, IEquipment, IWeapon
         AllowedClasses = allowedClasses?.ToList() ?? new List<ActorClass>(System.Enum.GetValues<ActorClass>());
         StatRequirements = statRequirements ?? new Dictionary<StatType, double>();
         Tier = tier;
+        RequirementsOptional = requirementsOptional;
 
         // Calculate base value from damage values for existing weapons
         BaseValue = CalculateBaseValueFromDamage(minDamage, maxDamage, speed, rarity);
