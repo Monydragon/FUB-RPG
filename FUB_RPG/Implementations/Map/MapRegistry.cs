@@ -479,6 +479,14 @@ public sealed class MapRegistry
             return hash;
         }
     }
+
+    /// <summary>
+    /// Get all loaded map names
+    /// </summary>
+    public IEnumerable<string> GetAllMapNames()
+    {
+        return _loadedMaps.Keys;
+    }
 }
 
 public class MapExitInfo
