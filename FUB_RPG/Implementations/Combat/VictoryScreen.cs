@@ -46,21 +46,22 @@ public class VictoryScreen
     // Compute safe printable width (avoid auto-wrap by leaving 1 column margin)
     private static int SafeWidth => Math.Max(60, Console.WindowWidth - 1);
 
-    // Build a full-width box header with centered title
-    private static void WriteFullWidthHeader(string title)
+    // Build a full-width yellow banner with centered content at the current cursor row
+    private static void WriteBanner(string content)
     {
         int w = SafeWidth;
-        string top = "╔" + new string('═', Math.Max(2, w - 2)) + "╗";
-        string bottom = "╚" + new string('═', Math.Max(2, w - 2)) + "╝";
         int inner = Math.Max(0, w - 2);
-        // title is non-null per annotations
-        title = title.Length > inner - 2 ? title.Substring(0, Math.Max(0, inner - 2)) : title;
-        int padLeft = Math.Max(0, (inner - title.Length) / 2);
-        int padRight = Math.Max(0, inner - title.Length - padLeft);
-        string middle = "║" + new string(' ', padLeft) + title + new string(' ', padRight) + "║";
+        string top = "╔" + new string('═', inner) + "╗";
+        string bottom = "╚" + new string('═', inner) + "╝";
+        content = content.Length > inner ? content.Substring(0, inner) : content;
+        int padLeft = Math.Max(0, (inner - content.Length) / 2);
+        int padRight = Math.Max(0, inner - content.Length - padLeft);
+        string mid = "║" + new string(' ', padLeft) + content + new string(' ', padRight) + "║";
+        Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine(top);
-        Console.WriteLine(middle);
+        Console.WriteLine(mid);
         Console.WriteLine(bottom);
+        Console.ResetColor();
     }
 
     // Calculate a stable interior width for the XP bar for a given label and progress text sample
@@ -82,17 +83,30 @@ public class VictoryScreen
     /// </summary>
     public void DisplayVictory(IActor actor, VictoryRewards rewards, int animationSpeedMs = 50)
     {
+        try
+        {
+            Console.SetBufferSize(Console.WindowWidth, Console.WindowHeight);
+        }
+        catch { /* ignore if not supported */ }
+        Console.CursorVisible = false;
         Console.Clear();
 
         // Victory header (full width)
         Console.ForegroundColor = ConsoleColor.Yellow;
-        WriteFullWidthHeader("⚔️  VICTORY!  ⚔️");
+        WriteBanner("⚔️  VICTORY!  ⚔️");
         Console.ResetColor();
 
         // Rewards
         DisplayRewardsSection(rewards);
 
-        // Animate XP
+        // Section banner with actor name and class level change/final
+        var gained = Math.Max(0, rewards.NewLevel - rewards.OldLevel);
+        string sectionTitle = gained > 0
+            ? $"⭐ {actor.Name} ({actor.Species}): CLASS LEVEL UP! {rewards.OldLevel} → {rewards.NewLevel} ⭐"
+            : $"⭐ {actor.Name} ({actor.Species}) — {actor.EffectiveClass} — Class Lv {rewards.NewLevel} ⭐";
+        WriteBanner(sectionTitle);
+
+        // Animate XP (no extra EXPERIENCE header)
         AnimateExperienceGain(actor, rewards, animationSpeedMs);
 
         // Summary
@@ -113,9 +127,15 @@ public class VictoryScreen
         if (allies == null) throw new ArgumentNullException(nameof(allies));
         if (rewardsList == null) throw new ArgumentNullException(nameof(rewardsList));
 
+        try
+        {
+            Console.SetBufferSize(Console.WindowWidth, Console.WindowHeight);
+        }
+        catch { /* ignore if not supported */ }
+        Console.CursorVisible = false;
         Console.Clear();
         Console.ForegroundColor = ConsoleColor.Yellow;
-        WriteFullWidthHeader("⚔️  VICTORY!  ⚔️");
+        WriteBanner("⚔️  VICTORY!  ⚔️");
         Console.ResetColor();
 
         var totalGold = rewardsList.Sum(r => r.GoldGained);
@@ -129,36 +149,46 @@ public class VictoryScreen
 
         DisplayRewardsSection(aggregated);
 
-        Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("--- Party Summary ---");
-        Console.ResetColor();
-        foreach (var ally in allies)
-        {
-            var jl = ally.JobSystem.GetJobLevel(ally.EffectiveClass);
-            Console.WriteLine($"  {ally.Name} (Lv {jl.Level})");
-        }
+        // Compute alignment parameters so all party XP bars line up perfectly
+        // Build the maximum label width across allies (use the longer of old/new level for each)
+        int maxLabelWidth = 0;
+        int maxProgressLen = 0;
+
+        static string BuildLabel(IActor a, int lvl) => $"  {a.Name} ({a.Species}): Class Lv {lvl} ({a.EffectiveClass}): ";
 
         for (int i = 0; i < allies.Count; i++)
         {
             var ally = allies[i];
             var rewards = i < rewardsList.Count ? rewardsList[i] : new VictoryRewards { ExperienceGained = 0, OldLevel = ally.JobSystem.GetJobLevel(ally.EffectiveClass).Level, NewLevel = ally.JobSystem.GetJobLevel(ally.EffectiveClass).Level };
 
-            Console.WriteLine();
-            Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine($"--- {ally.Name} (Lv {rewards.OldLevel} → {rewards.NewLevel}) ---");
-            Console.ResetColor();
+            // Label width: take the longer between old and new level labels to remain stable during animation
+            int labelLen = Math.Max(BuildLabel(ally, Math.Max(1, rewards.OldLevel)).Length,
+                                    BuildLabel(ally, Math.Max(1, rewards.NewLevel)).Length);
+            maxLabelWidth = Math.Max(maxLabelWidth, labelLen);
 
-            Console.ForegroundColor = ConsoleColor.Gray;
-            Console.WriteLine($"  Species: {ally.Species}  |  Class: {ally.EffectiveClass}");
-            Console.ResetColor();
+            // Progress text length: use final state as representative sample
+            var jl = ally.JobSystem.GetJobLevel(ally.EffectiveClass);
+            var xpCur = _xpCalculator.GetExperienceForLevel(jl.Level, LevelCurveType.Custom);
+            var xpNxt = _xpCalculator.GetExperienceForLevel(jl.Level + 1, LevelCurveType.Custom);
+            var bar = new ExperienceBar(jl.Level, jl.Experience, xpCur, xpNxt);
+            maxProgressLen = Math.Max(maxProgressLen, bar.GetProgressText().Length);
+        }
 
-            AnimateExperienceGain(ally, rewards, animationSpeedMs, simple: false);
+        int uniformBarWidth = Math.Max(10, SafeWidth - (maxLabelWidth + 1 + maxProgressLen + 2));
+
+        // Compact per-ally section: no three-line banners, just the bar with the ally name in-label
+        for (int i = 0; i < allies.Count; i++)
+        {
+            var ally = allies[i];
+            var rewards = i < rewardsList.Count ? rewardsList[i] : new VictoryRewards { ExperienceGained = 0, OldLevel = ally.JobSystem.GetJobLevel(ally.EffectiveClass).Level, NewLevel = ally.JobSystem.GetJobLevel(ally.EffectiveClass).Level };
+
+            // XP animation (tight, single line; label includes name/species and is padded to common width; bar uses uniform width)
+            AnimateExperienceGain(ally, rewards, animationSpeedMs, simple: false, labelPadWidth: maxLabelWidth, fixedBarWidth: uniformBarWidth);
 
             ShowStatChanges(rewards);
             ShowLearnedAbilities(rewards);
         }
 
-        Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.White;
         Console.WriteLine("═══ SUMMARY ═══");
         Console.ResetColor();
@@ -169,7 +199,7 @@ public class VictoryScreen
             Console.ForegroundColor = ConsoleColor.Green;
             Console.Write("  Experience Gained: ");
             Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine($"{name}: +{r.ExperienceGained} XP (Lv {r.OldLevel} → {r.NewLevel})");
+            Console.WriteLine($"{name}: +{r.ExperienceGained} XP (Class Lv {r.OldLevel} → {r.NewLevel})");
             Console.ResetColor();
             if (r.LearnedAbilities is { Count: > 0 })
             {
@@ -248,20 +278,18 @@ public class VictoryScreen
         }
     }
 
-    private void AnimateExperienceGain(IActor actor, VictoryRewards rewards, int animationSpeedMs, bool simple = false)
+    private void AnimateExperienceGain(IActor actor, VictoryRewards rewards, int animationSpeedMs, bool simple = false, int? labelPadWidth = null, int? fixedBarWidth = null)
     {
         if (simple)
         {
-            Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine("EXPERIENCE");
-            Console.ResetColor();
             var jl = actor.JobSystem.GetJobLevel(actor.EffectiveClass);
             var xpCurLevel = _xpCalculator.GetExperienceForLevel(jl.Level, LevelCurveType.Custom);
             var xpNext = _xpCalculator.GetExperienceForLevel(jl.Level + 1, LevelCurveType.Custom);
             var bar = new ExperienceBar(jl.Level, jl.Experience, xpCurLevel, xpNext);
-            string label = $"  Level {jl.Level}: ";
+            string label = $"  {actor.Name} ({actor.Species}): Class Lv {jl.Level} ({actor.EffectiveClass}): ";
+            if (labelPadWidth.HasValue) label = label.PadRight(labelPadWidth.Value);
             string progress = bar.GetProgressText();
-            int bw = CalcBarInteriorWidth(label, progress);
+            int bw = fixedBarWidth ?? CalcBarInteriorWidth(label, progress);
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.Write(label);
             Console.ResetColor();
@@ -272,13 +300,13 @@ public class VictoryScreen
             if (rewards.NewLevel > rewards.OldLevel)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"  LEVEL UP! {rewards.OldLevel} → {rewards.NewLevel} (+{rewards.NewLevel - rewards.OldLevel}) - Resources Restored");
+                Console.WriteLine($"  CLASS LEVEL UP! {rewards.OldLevel} → {rewards.NewLevel} (+{rewards.NewLevel - rewards.OldLevel}) - Resources Restored");
                 Console.ResetColor();
             }
             return;
         }
 
-        // Local helper: non-blocking skip detection
+        // Non-simple: animate bar in place without extra banners/headers
         static bool IsSkipKey(ConsoleKeyInfo k) => k.Key == ConsoleKey.Spacebar || k.Key == ConsoleKey.Enter;
         bool CheckSkip()
         {
@@ -287,10 +315,10 @@ public class VictoryScreen
                 if (Console.KeyAvailable)
                 {
                     var key = Console.ReadKey(intercept: true);
-                    if (IsSkipKey(key)) return true; // consume and skip
+                    if (IsSkipKey(key)) return true;
                 }
             }
-            catch { /* ignore environments without a key buffer */ }
+            catch { }
             return false;
         }
 
@@ -298,58 +326,27 @@ public class VictoryScreen
         int oldLevel = rewards.OldLevel;
         int newLevel = rewards.NewLevel;
         long xpGained = rewards.ExperienceGained;
-        long finalTotalXp = levelInfo.Experience; // cumulative xp after reward
+        long finalTotalXp = levelInfo.Experience;
         long startTotalXp = finalTotalXp - xpGained;
-
-        Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("EXPERIENCE");
-        Console.ResetColor();
 
         // Precompute thresholds up to newLevel+1 (cumulative xp required to be that level)
         var thresholds = new List<long>();
         for (int lvl = 1; lvl <= Math.Max(1, newLevel) + 1; lvl++)
             thresholds.Add(_xpCalculator.GetExperienceForLevel(lvl, LevelCurveType.Custom));
 
-        // Guard when no XP gained
-        if (xpGained <= 0)
+        // Decide if we can animate in place (reposition supported)
+        bool canReposition = true;
+        try { Console.SetCursorPosition(Console.CursorLeft, Console.CursorTop); } catch { canReposition = false; }
+        if (!canReposition)
         {
-            long levelStartNoGain = thresholds[Math.Max(0, newLevel - 1)];
-            long levelNextNoGain = thresholds[Math.Max(0, newLevel)];
-            var barNoGain = new ExperienceBar(newLevel, finalTotalXp, levelStartNoGain, levelNextNoGain);
-            string label = $"  Level {newLevel}: ";
-            string progress = barNoGain.GetProgressText();
-            int bw = CalcBarInteriorWidth(label, progress);
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.Write(label);
-            Console.ResetColor();
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.Write(barNoGain.GetBarString(bw));
-            Console.ResetColor();
-            Console.WriteLine(" " + progress);
-            return;
-        }
-
-        int levelsGained = Math.Max(0, newLevel - oldLevel);
-
-        // If this console cannot reposition the cursor reliably, avoid reserving lines.
-        bool canRepositionEarly = true;
-        try { Console.SetCursorPosition(Console.CursorLeft, Console.CursorTop); } catch { canRepositionEarly = false; }
-        if (!canRepositionEarly)
-        {
-            if (levelsGained > 0)
-            {
-                for (int lvl = oldLevel + 1; lvl <= newLevel; lvl++)
-                {
-                    DisplayLevelUp(lvl);
-                }
-            }
-
-            long finalLevelStart = thresholds[Math.Max(0, newLevel - 1)];
-            long finalLevelNext = thresholds[Math.Max(0, newLevel)];
-            var finalBar = new ExperienceBar(newLevel, finalTotalXp, finalLevelStart, finalLevelNext);
-            string label = $"  Level {newLevel}: ";
+            // Fallback: print final bar only
+            long levelStart = thresholds[Math.Max(0, newLevel - 1)];
+            long levelNext = thresholds[Math.Max(0, newLevel)];
+            var finalBar = new ExperienceBar(newLevel, finalTotalXp, levelStart, levelNext);
+            string label = $"  {actor.Name} ({actor.Species}): Class Lv {newLevel} ({actor.EffectiveClass}): ";
+            if (labelPadWidth.HasValue) label = label.PadRight(labelPadWidth.Value);
             string progress = finalBar.GetProgressText();
-            int bw = CalcBarInteriorWidth(label, progress);
+            int bw = fixedBarWidth ?? CalcBarInteriorWidth(label, progress);
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.Write(label);
             Console.ResetColor();
@@ -360,39 +357,9 @@ public class VictoryScreen
             return;
         }
 
-        // Reserve a block for banners (3 lines each) and a single line for the bar
-        int bannerLinesPer = 3;
-        int totalBannerLines = levelsGained * bannerLinesPer;
-        for (int i = 0; i < totalBannerLines; i++) Console.WriteLine();
-        Console.WriteLine();
-        int barRow = Math.Max(0, Console.CursorTop - 1);
-        int continuationRow = Console.CursorTop;
+        int barRow = Console.CursorTop; // reserve current line for bar (no extra blank line)
+        // Do not insert an extra Console.WriteLine() here; draw the bar on the current line to keep everything top-aligned
 
-        bool repositionFailedDuringAnimation = false;
-        bool skipRequested = false;
-        int bannersDrawnCount = 0;
-
-        void DrawFinalState()
-        {
-            // Draw any remaining banners bottom-up and the final bar
-            if (levelsGained > 0)
-            {
-                for (int i = bannersDrawnCount; i < levelsGained; i++)
-                {
-                    int bannerTop = Math.Max(0, barRow - 1 - (i * bannerLinesPer));
-                    DrawBannerAt(bannerTop - (bannerLinesPer - 1), oldLevel + 1 + i);
-                }
-            }
-
-            long finalLevelStart = thresholds[Math.Max(0, newLevel - 1)];
-            long finalLevelNext = thresholds[Math.Max(0, newLevel)];
-            if (!repositionFailedDuringAnimation)
-            {
-                DrawFrame(newLevel, finalLevelStart, finalLevelNext, finalTotalXp);
-            }
-        }
-
-        // Helper: draw one frame at the reserved bar line
         void DrawFrame(int level, long levelStart, long levelNext, long simulatedTotal)
         {
             var frameBar = new ExperienceBar(level, simulatedTotal, levelStart, levelNext);
@@ -405,26 +372,28 @@ public class VictoryScreen
             }
             catch
             {
-                repositionFailedDuringAnimation = true;
-                long finalLevelStart2 = thresholds[Math.Max(0, newLevel - 1)];
-                long finalLevelNext2 = thresholds[Math.Max(0, newLevel)];
-                var finalBar2 = new ExperienceBar(newLevel, finalTotalXp, finalLevelStart2, finalLevelNext2);
-                string label2 = $"  Level {newLevel}: ";
-                string progress2 = finalBar2.GetProgressText();
-                int bw2 = CalcBarInteriorWidth(label2, progress2);
+                // If we fail positioning mid-animation, just print final state once below
+                long fs = thresholds[Math.Max(0, newLevel - 1)];
+                long fn = thresholds[Math.Max(0, newLevel)];
+                var fb = new ExperienceBar(newLevel, finalTotalXp, fs, fn);
+                string l2 = $"  {actor.Name} ({actor.Species}): Class Lv {newLevel} ({actor.EffectiveClass}): ";
+                if (labelPadWidth.HasValue) l2 = l2.PadRight(labelPadWidth.Value);
+                string p2 = fb.GetProgressText();
+                int bw2 = fixedBarWidth ?? CalcBarInteriorWidth(l2, p2);
                 Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.Write(label2);
+                Console.Write(l2);
                 Console.ResetColor();
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.Write(finalBar2.GetBarString(bw2));
+                Console.Write(fb.GetBarString(bw2));
                 Console.ResetColor();
-                Console.WriteLine(" " + progress2);
+                Console.WriteLine(" " + p2);
                 return;
             }
 
-            string lbl = $"  Level {level}: ";
+            string lbl = $"  {actor.Name} ({actor.Species}): Class Lv {level} ({actor.EffectiveClass}): ";
+            if (labelPadWidth.HasValue) lbl = lbl.PadRight(labelPadWidth.Value);
             string ptxt = frameBar.GetProgressText();
-            int bwFrame = CalcBarInteriorWidth(lbl, ptxt);
+            int bwFrame = fixedBarWidth ?? CalcBarInteriorWidth(lbl, ptxt);
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.Write(lbl);
             Console.ResetColor();
@@ -434,47 +403,18 @@ public class VictoryScreen
             Console.Write($" {ptxt}");
         }
 
-        // Helper: draw a level-up banner at a specific row (3 lines) without adding new lines
-        void DrawBannerAt(int topRow, int newLvl)
+        if (xpGained <= 0)
         {
-            int w = SafeWidth;
-            int inner = Math.Max(0, w - 2);
-            string top = "╔" + new string('═', inner) + "╗";
-            string bottom = "╚" + new string('═', inner) + "╝";
-            string text = $"⭐ LEVEL UP! → {newLvl} ⭐";
-            text = text.Length > inner ? text.Substring(0, inner) : text;
-            int padLeft = Math.Max(0, (inner - text.Length) / 2);
-            int padRight = Math.Max(0, inner - text.Length - padLeft);
-            string mid = "║" + new string(' ', padLeft) + text + new string(' ', padRight) + "║";
-            var blank = new string(' ', w);
-
-            try
-            {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.SetCursorPosition(0, topRow);
-                Console.Write(blank);
-                Console.SetCursorPosition(0, topRow);
-                Console.Write(top);
-                Console.SetCursorPosition(0, topRow + 1);
-                Console.Write(blank);
-                Console.SetCursorPosition(0, topRow + 1);
-                Console.Write(mid);
-                Console.SetCursorPosition(0, topRow + 2);
-                Console.Write(blank);
-                Console.SetCursorPosition(0, topRow + 2);
-                Console.Write(bottom);
-                Console.ResetColor();
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"VictoryScreen: DrawBannerAt positioning failed: {ex.Message}");
-                DisplayLevelUp(newLvl);
-            }
+            long levelStart = thresholds[Math.Max(0, newLevel - 1)];
+            long levelNext = thresholds[Math.Max(0, newLevel)];
+            DrawFrame(newLevel, levelStart, levelNext, finalTotalXp);
+            try { Console.SetCursorPosition(0, barRow + 1); } catch { }
+            return;
         }
 
-        if (levelsGained == 0)
+        // Animate either within a level or across multiple levels
+        if (newLevel == oldLevel)
         {
-            // Animate within the same level (no level up)
             long levelStart = thresholds[Math.Max(0, newLevel - 1)];
             long levelNext = thresholds[Math.Max(0, newLevel)];
             long startInside = Math.Max(0, startTotalXp - levelStart);
@@ -485,98 +425,48 @@ public class VictoryScreen
             int steps = deltaInside <= 0 ? 1 : (int)Math.Clamp(deltaInside / Math.Max(1, span / 80.0), 20, 120);
             double insidePerStep = steps <= 1 ? deltaInside : deltaInside / (double)steps;
 
-            try
+            for (int i = 0; i <= steps; i++)
             {
-                for (int i = 0; i <= steps; i++)
-                {
-                    if (repositionFailedDuringAnimation) break;
-                    if (!skipRequested && CheckSkip()) { skipRequested = true; break; }
-                    long inside = startInside + (long)Math.Round(insidePerStep * i);
-                    if (i == steps) inside = finalInside;
-                    long simulatedTotalXp = levelStart + inside;
-                    DrawFrame(newLevel, levelStart, levelNext, simulatedTotalXp);
-                    if (!skipRequested && i < steps && animationSpeedMs > 0) Thread.Sleep(animationSpeedMs);
-                }
+                if (CheckSkip()) { break; }
+                long inside = startInside + (long)Math.Round(insidePerStep * i);
+                if (i == steps) inside = finalInside;
+                long simulatedTotalXp = levelStart + inside;
+                DrawFrame(newLevel, levelStart, levelNext, simulatedTotalXp);
+                if (i < steps && animationSpeedMs > 0) Thread.Sleep(animationSpeedMs);
             }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"VictoryScreen: XP animation loop failed: {ex.Message}");
-            }
-
-            if (skipRequested)
-            {
-                DrawFinalState();
-            }
-
-            if (!repositionFailedDuringAnimation)
-            {
-                try { Console.SetCursorPosition(0, continuationRow); } catch (Exception ex) { Console.Error.WriteLine($"VictoryScreen: Unable to reposition cursor after XP animation: {ex.Message}"); }
-                Console.WriteLine();
-            }
-            return;
         }
-
-        // Animate across multiple levels
-        int bannerIndex = 0;
-        for (int lvl = oldLevel; lvl <= newLevel; lvl++)
+        else
         {
-            if (repositionFailedDuringAnimation) break;
-            if (!skipRequested && CheckSkip()) { skipRequested = true; }
-
-            int idxStart = Math.Max(0, lvl - 1);
-            int idxNext = Math.Max(0, lvl);
-            long levelStart = thresholds[idxStart];
-            long levelNext = thresholds[Math.Min(idxNext, thresholds.Count - 1)];
-
-            long segStartInside = lvl == oldLevel ? Math.Max(0, startTotalXp - levelStart) : 0;
-            long segEndInside = lvl == newLevel ? Math.Max(0, finalTotalXp - levelStart) : Math.Max(0, levelNext - levelStart);
-
-            long span = Math.Max(1, levelNext - levelStart);
-            long deltaInside = Math.Max(0, segEndInside - segStartInside);
-
-            int steps = deltaInside <= 0 ? 1 : (int)Math.Clamp(deltaInside / Math.Max(1, span / 80.0), 20, 150);
-            double insidePerStep = steps <= 1 ? deltaInside : deltaInside / (double)steps;
-
-            try
+            for (int lvl = oldLevel; lvl <= newLevel; lvl++)
             {
+                int idxStart = Math.Max(0, lvl - 1);
+                int idxNext = Math.Max(0, lvl);
+                long levelStart = thresholds[idxStart];
+                long levelNext = thresholds[Math.Min(idxNext, thresholds.Count - 1)];
+
+                long segStartInside = lvl == oldLevel ? Math.Max(0, startTotalXp - levelStart) : 0;
+                long segEndInside = lvl == newLevel ? Math.Max(0, finalTotalXp - levelStart) : Math.Max(0, levelNext - levelStart);
+
+                long span = Math.Max(1, levelNext - levelStart);
+                long deltaInside = Math.Max(0, segEndInside - segStartInside);
+
+                int steps = deltaInside <= 0 ? 1 : (int)Math.Clamp(deltaInside / Math.Max(1, span / 80.0), 20, 150);
+                double insidePerStep = steps <= 1 ? deltaInside : deltaInside / (double)steps;
+
                 for (int i = 0; i <= steps; i++)
                 {
-                    if (repositionFailedDuringAnimation) break;
-                    if (!skipRequested && CheckSkip()) { skipRequested = true; break; }
+                    if (CheckSkip()) { lvl = newLevel; break; }
                     long inside = segStartInside + (long)Math.Round(insidePerStep * i);
                     if (i == steps) inside = segEndInside;
                     long simulatedTotalXp = levelStart + inside;
                     DrawFrame(lvl, levelStart, levelNext, simulatedTotalXp);
-                    if (!skipRequested && i < steps && animationSpeedMs > 0) Thread.Sleep(animationSpeedMs);
+                    if (i < steps && animationSpeedMs > 0) Thread.Sleep(animationSpeedMs);
                 }
             }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"VictoryScreen: XP multi-level animation failed: {ex.Message}");
-                break;
-            }
-
-            if (skipRequested)
-            {
-                DrawFinalState();
-                break;
-            }
-
-            if (lvl < newLevel)
-            {
-                int bannerTop = Math.Max(0, barRow - 1 - (bannerIndex * bannerLinesPer));
-                DrawBannerAt(bannerTop - (bannerLinesPer - 1), lvl + 1);
-                bannersDrawnCount++;
-                bannerIndex++;
-                if (animationSpeedMs > 0) Thread.Sleep(Math.Min(400, animationSpeedMs * 6));
-            }
         }
 
-        if (!repositionFailedDuringAnimation)
-        {
-            try { Console.SetCursorPosition(0, continuationRow); } catch (Exception ex) { Console.Error.WriteLine($"VictoryScreen: Unable to reposition cursor after multi-level animation: {ex.Message}"); }
-            Console.WriteLine();
-        }
+        try { Console.SetCursorPosition(0, barRow + 1); } catch { }
+        // No extra Console.WriteLine() here — keep tight, top-aligned layout
     }
 
     private void DisplayLevelUp(int newLevel)
@@ -586,7 +476,7 @@ public class VictoryScreen
         int inner = Math.Max(0, w - 2);
         string top = "╔" + new string('═', inner) + "╗";
         string bottom = "╚" + new string('═', inner) + "╝";
-        string text = $"⭐ LEVEL UP! → {newLevel} ⭐";
+        string text = $"⭐ CLASS LEVEL UP! → {newLevel} ⭐";
         text = text.Length > inner ? text.Substring(0, inner) : text;
         int padLeft = Math.Max(0, (inner - text.Length) / 2);
         int padRight = Math.Max(0, inner - text.Length - padLeft);
@@ -614,7 +504,7 @@ public class VictoryScreen
         if (rewards.LevelsGained > 0)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.Write("  Level Progress: ");
+            Console.Write("  Class Level Progress: ");
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine($"{rewards.OldLevel} → {rewards.NewLevel} (+{rewards.LevelsGained} level{(rewards.LevelsGained > 1 ? "s" : "")})");
             Console.ResetColor();
@@ -643,7 +533,7 @@ public class VictoryScreen
 
         if (rewards.LevelsGained > 0)
         {
-            Console.WriteLine($"LEVEL UP! {rewards.OldLevel} → {rewards.NewLevel}");
+            Console.WriteLine($"CLASS LEVEL UP! {rewards.OldLevel} → {rewards.NewLevel}");
         }
 
         if (rewards.ItemsDropped.Count > 0)
@@ -655,7 +545,7 @@ public class VictoryScreen
             }
         }
 
-        var jobLevel = actor.JobSystem.GetJobLevel(actor.Class);
+        var jobLevel = actor.JobSystem.GetJobLevel(actor.EffectiveClass);
         var bar = new ExperienceBar(
             jobLevel.Level,
             jobLevel.Experience,
